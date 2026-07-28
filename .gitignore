@@ -10,3 +10,7 @@ out/
 config/mapping.json
 *.csv
 !test/**/*.csv
+
+# Electron
+dist/
+preview/

@@ -116,3 +116,50 @@ against an SMB mount. On Windows, paths are prefixed `\\?\` internally so
   `natives.csv` lists exactly what to export and to what.
 - Copy anything. Review the plan and run it yourself.
 - Decide conflicts. It surfaces them; a human picks.
+
+## Desktop app
+
+```bash
+npm install
+npm start
+```
+
+Pick the Google Drive folder, add one or more NAS folders, optionally load the
+Drive manifest CSV, hit **Compare**. Results land in five tabs — Already on NAS,
+New, Conflicts, Native stubs, NAS overlap — and **Export reports…** writes the
+same CSVs and copy plan the CLI produces.
+
+An accuracy badge states which mode you are in: **Exact** once a manifest with
+checksums is loaded, **Approximate** otherwise. It is not decoration — in
+approximate mode a renamed-but-identical file is reported as new.
+
+### Remapping when it misses
+
+Rows in **New** carry two actions, because "new" is sometimes wrong:
+
+- **Set destination…** — map that Drive folder to a NAS path. Written as a `map`
+  rule.
+- **Already on NAS…** — search the NAS for the file it actually duplicates and
+  pick it. The app records the two *parent folder names* as the same project, so
+  every other file in them matches on the next run. This is how
+  `UIH Dental` ≡ `u0004_Custom_Haptic_VR_Dentistry` gets learned once instead of
+  file by file.
+
+Rules persist to `mapping.json` in the app's user-data folder and apply on the
+next Compare — the UI says so rather than implying the table already reflects it.
+
+The comparison runs in a forked child process, so a long walk over an SMB share
+never freezes the window. The renderer has no Node access at all: `contextIsolation`
+is on, `nodeIntegration` off, and every capability is an explicit channel in
+`electron/preload.cjs`.
+
+### Verifying UI changes
+
+```bash
+npm run preview   # then open preview/index.html
+```
+
+Builds a browser-runnable copy from the **real** `electron/ui/*` with a mocked
+bridge, so the interface can be exercised without packaging, a NAS or a Drive
+mount. Same technique as the sibling Drive tool, where it caught two bugs no
+server-side check could have.

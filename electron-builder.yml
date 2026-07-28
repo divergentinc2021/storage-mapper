@@ -1,0 +1,25 @@
+appId: com.divergentinc.storagemapper
+productName: Storage Mapper
+copyright: UWC Immersive Zone
+
+directories:
+  output: dist
+  buildResources: build
+
+# The core lives in src/ and is imported by electron/worker.mjs at runtime, so
+# it has to be packaged alongside the Electron entry points.
+files:
+  - electron/**/*
+  - src/**/*
+  - package.json
+
+mac:
+  target: [dmg]
+  category: public.app-category.utilities
+
+win:
+  target: [nsis]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

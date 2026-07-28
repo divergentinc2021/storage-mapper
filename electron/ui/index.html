@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+  <title>Storage Mapper</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <svg class="logo" viewBox="0 0 512 512" aria-hidden="true">
+    <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a40a1b"/><stop offset=".55" stop-color="#d34b49"/>
+      <stop offset="1" stop-color="#eed4d1"/></linearGradient></defs>
+    <rect width="512" height="512" rx="114" fill="url(#lg)"/>
+    <g fill="#fff">
+      <rect x="96" y="96" width="190" height="180" rx="10"/>
+      <rect x="304" y="96" width="112" height="180" rx="10" opacity=".84"/>
+      <rect x="96" y="294" width="190" height="122" rx="10" opacity=".68"/>
+      <rect x="304" y="294" width="112" height="122" rx="10" opacity=".52"/>
+    </g>
+  </svg>
+  <h1>Storage Mapper <span>· Drive → NAS</span></h1>
+  <div class="spacer"></div>
+  <button class="btn" id="btnExport" disabled>Export reports…</button>
+  <button class="btn" id="btnTheme" title="Toggle theme">◐</button>
+</header>
+
+<section class="setup">
+  <div class="pick">
+    <label>Google Drive</label>
+    <div class="paths" id="drivePaths"></div>
+    <button class="btn" id="btnDrive">Choose…</button>
+  </div>
+  <div class="pick">
+    <label>NAS folders</label>
+    <div class="paths" id="nasPaths"></div>
+    <button class="btn" id="btnNas">Add…</button>
+  </div>
+  <div class="pick">
+    <label>Drive manifest</label>
+    <div class="accuracy">
+      <span class="badge approx" id="accBadge">Approximate — size + name</span>
+      <span id="accText">No manifest loaded. Renamed-but-identical files will look new.</span>
+    </div>
+    <button class="btn" id="btnManifest">Choose CSV…</button>
+  </div>
+  <div class="pick">
+    <label></label>
+    <div><span id="setupHint" style="font-size:12px;color:var(--muted)"></span></div>
+    <button class="btn primary" id="btnCompare" disabled>Compare</button>
+  </div>
+</section>
+
+<div class="bar" id="bar" hidden>
+  <div class="track"><i id="barFill"></i></div>
+  <span id="barText">Working…</span>
+</div>
+
+<div class="tabs" id="tabs">
+  <button class="on" data-tab="duplicates">Already on NAS <span class="n" id="nDup"></span></button>
+  <button data-tab="new">New <span class="n" id="nNew"></span></button>
+  <button data-tab="conflicts">Conflicts <span class="n" id="nCon"></span></button>
+  <button data-tab="natives">Native stubs <span class="n" id="nNat"></span></button>
+  <button data-tab="overlap">NAS overlap <span class="n" id="nOver"></span></button>
+</div>
+
+<main id="main">
+  <div class="empty" id="emptyState">
+    Choose your Google Drive folder and one or more NAS folders, then hit Compare.<br>
+    Nothing is copied, moved or deleted — this only produces a plan.
+  </div>
+</main>
+
+<dialog id="remapDlg">
+  <h2 id="remapTitle">Remap</h2>
+  <p class="hint" id="remapHint"></p>
+  <input type="text" id="remapInput" placeholder="Search the NAS by file name…">
+  <div class="results" id="remapResults"></div>
+  <div class="note" id="remapNote" hidden></div>
+  <div class="dlgfoot">
+    <button class="btn" id="remapCancel">Cancel</button>
+    <button class="btn primary" id="remapSave" disabled>Save rule</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
