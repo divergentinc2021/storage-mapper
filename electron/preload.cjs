@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld('mapper', {
   profilesSetShared: (pick) => ipcRenderer.invoke('profiles-set-shared', pick),
   profilesSharedApplied: (hash, shared) => ipcRenderer.invoke('profiles-shared-applied', { hash, shared }),
   profilesSettings: () => ipcRenderer.invoke('profiles-settings'),
+  copyRun: (opts) => ipcRenderer.invoke('copy-run', opts),
+  copyCancel: () => ipcRenderer.invoke('copy-cancel'),
+  copyEngine: () => ipcRenderer.invoke('copy-engine'),
+  onCopyEvent: (cb) => {
+    const h = (_e, m) => cb(m);
+    ipcRenderer.on('copy-event', h);
+    return () => ipcRenderer.removeListener('copy-event', h);
+  },
   onProgress: (cb) => {
     const h = (_e, m) => cb(m);
     ipcRenderer.on('progress', h);

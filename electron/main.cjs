@@ -10,6 +10,7 @@ const { fork } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const profiles = require('./profiles.cjs');
+const copier = require('./copy.cjs');
 
 const ROOT = path.join(__dirname, '..');
 let win = null;
@@ -183,3 +184,23 @@ ipcMain.handle('profiles-shared-applied', async (_e, { hash, shared }) => {
   profiles.markSharedApplied(app, hash, shared);
   return true;
 });
+
+// ── copy ────────────────────────────────────────────────────────────────────
+/*
+  The only place this app writes to the NAS. It adds files and nothing else:
+  the engine never emits /MIR, /PURGE or /MOV, and rsync runs without --delete.
+  Only rows the renderer sends are acted on, and each is re-checked for an
+  absolute destination inside the runner.
+*/
+ipcMain.handle('copy-run', async (_e, opts) => {
+  if (copier.isBusy()) return { ok: false, error: 'a copy is already running' };
+  const send = (evt) => { if (win) win.webContents.send('copy-event', evt); };
+  try {
+    return await copier.run(opts, send);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('copy-cancel', async () => { copier.cancel(); return true; });
+ipcMain.handle('copy-engine', async () => ({ engine: copier.engine(), isWindows: copier.IS_WIN }));

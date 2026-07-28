@@ -232,3 +232,45 @@ destination would be created next to wherever the plan is run instead of on the
 NAS. The dialog now refuses to save one, **Browse…** picks a real folder, and any
 row that still lacks an absolute destination is written into the plan as a
 commented skip with the reason — never as a command that would misfire.
+
+## Copy to NAS
+
+The **New** tab has a **Copy to NAS…** button once rows have absolute
+destinations. **Dry run** first — it passes `/L`, so robocopy reports exactly
+what it would do and writes nothing.
+
+### Why not PowerShell
+
+The destinations include `Preclinical Dental Education VR & Haptics`. `&` is a
+command separator in `cmd.exe` and a special character in PowerShell, so going
+through a shell means quoting it correctly forever. `robocopy.exe` is spawned
+**directly with an argument array** — no shell exists in the pipeline, so
+ampersands, spaces and brackets are safe by construction. Same speed, one fewer
+way to fail.
+
+### Reading the result honestly
+
+**Robocopy's exit code is a bitmask and non-zero is usually success** — exit 1
+means "files were copied". Treating non-zero as failure would report every good
+copy as broken; treating any code as fine would hide a real one.
+
+| code | meaning |
+|---|---|
+| 0 | nothing to do, destination already current |
+| 1–7 | **success** (1 copied · 2 extra files present · 4 mismatches) |
+| 8 | **FAILED** — some files could not be copied |
+| 16 | **FAILED** — serious error, nothing copied |
+
+The app reports success only for `< 8`, and names which folder failed and why.
+
+### What it cannot do
+
+`/MIR`, `/PURGE`, `/MOV` and `--delete` are never emitted, and `/XO` stops a
+newer file on the NAS being replaced by an older one from Drive. **The copy can
+only add.** Groups run one at a time — parallel jobs over a single SMB share
+contend for the same link, finish no sooner, and make a partial failure much
+harder to attribute.
+
+After a successful copy, run **Compare** again: everything you copied should move
+into *Already on NAS*. That round trip is the proof it landed — not the absence
+of errors in the log.

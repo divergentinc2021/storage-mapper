@@ -78,6 +78,27 @@
   </div>
 </main>
 
+<dialog id="copyDlg">
+  <h2 id="copyTitle">Copy to the NAS</h2>
+  <p class="hint" id="copyHint"></p>
+  <div class="note" id="copySafety">
+    Only <b>new</b> files with an absolute destination are copied. Existing files are
+    never overwritten with an older one, and <b>nothing is ever deleted</b> — the
+    engine is run without <code>/MIR</code>, <code>/PURGE</code> or <code>--delete</code>.
+  </div>
+  <div class="bar" id="copyBar" hidden style="padding:8px 0;border:0;background:none">
+    <div class="track"><i id="copyFill"></i></div><span id="copyStatus"></span>
+  </div>
+  <div class="results" id="copyLog" hidden></div>
+  <div class="note" id="copyResult" hidden></div>
+  <div class="dlgfoot">
+    <button class="btn" id="copyClose">Close</button>
+    <button class="btn" id="copyCancel" hidden>Stop</button>
+    <button class="btn" id="copyDry">Dry run</button>
+    <button class="btn primary" id="copyGo">Copy now</button>
+  </div>
+</dialog>
+
 <dialog id="profDlg">
   <h2 id="profTitle">Profiles</h2>
   <p class="hint" id="profHint"></p>

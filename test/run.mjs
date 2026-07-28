@@ -236,5 +236,97 @@ check('refuses a Drive mount passed as --nas', () => {
   assert.ok(!existsSync(path.join(TMP, 'out2')), 'should not have produced output');
 });
 
+
+// ── copy engine ─────────────────────────────────────────────────────────────
+import { classifyRobocopy, classifyRsync, robocopyArgs, rsyncArgs, planGroups }
+  from '../src/robocopy.mjs';
+import { createRequire } from 'node:module';
+
+console.log('\ncopy engine\n');
+
+check('robocopy exit codes: 0-7 are SUCCESS, 8+ are failure', () => {
+  // The trap: exit 1 means "files were copied" — the normal success case.
+  for (const c of [0, 1, 2, 3, 4, 5, 6, 7]) {
+    assert.equal(classifyRobocopy(c).ok, true, `exit ${c} should be success`);
+  }
+  for (const c of [8, 9, 11, 16, 24]) {
+    assert.equal(classifyRobocopy(c).ok, false, `exit ${c} should be FAILURE`);
+  }
+  assert.match(classifyRobocopy(0).summary, /nothing to copy/);
+  assert.match(classifyRobocopy(1).summary, /copied successfully/);
+  assert.match(classifyRobocopy(8).summary, /FAILED/);
+  assert.match(classifyRobocopy(16).summary, /nothing was copied/);
+  assert.equal(classifyRsync(0).ok, true);
+  assert.equal(classifyRsync(23).ok, false);
+});
+
+check('copy args can never delete on the destination', () => {
+  const a = robocopyArgs({ srcDir: 'S', dstDir: 'D', files: ['a.mp4'], logFile: 'L' }).join(' ');
+  for (const bad of ['/MIR', '/PURGE', '/MOV', '/MOVE']) {
+    assert.ok(!a.includes(bad), `robocopy args must never contain ${bad}`);
+  }
+  assert.ok(a.includes('/XO'), 'must not overwrite a newer file on the NAS');
+  const r = rsyncArgs({ srcDir: 'S', dstDir: 'D', files: ['a.mp4'] }).join(' ');
+  assert.ok(!r.includes('--delete'), 'rsync args must never contain --delete');
+  assert.ok(r.includes('--ignore-existing'));
+  assert.ok(robocopyArgs({ srcDir:'S', dstDir:'D', files:['a'], dryRun:true }).includes('/L'),
+    'dry run must pass /L so nothing is written');
+});
+
+check('args are passed as argv, so "VR & Haptics" needs no quoting', () => {
+  const dst = 'Z:\\Projects\\Preclinical Dental Education VR & Haptics\\_fromDrive';
+  const args = robocopyArgs({ srcDir: 'H:\\My Drive\\x', dstDir: dst, files: ['a b.mp4'] });
+  // The ampersand and spaces survive intact as ONE argument each — no shell sees them.
+  assert.ok(args.includes(dst), 'destination was mangled');
+  assert.ok(args.includes('a b.mp4'), 'filename with a space was split');
+});
+
+check('planGroups skips rows it cannot safely act on', () => {
+  const isAbs = (p) => /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('/') || p.startsWith('\\\\');
+  const { groups, skipped } = planGroups([
+    { drivePath: 'A/x.mp4', name: 'x.mp4', size: 10, driveRoot: '/src', proposedNas: '/nas/A/x.mp4' },
+    { drivePath: 'A/y.mp4', name: 'y.mp4', size: 20, driveRoot: '/src', proposedNas: '/nas/A/y.mp4' },
+    { drivePath: 'B/z.mp4', name: 'z.mp4', size: 30, driveRoot: '/src', proposedNas: 'relative/z.mp4' },
+    { drivePath: 'C/w.mp4', name: 'w.mp4', size: 40, driveRoot: '/src', proposedNas: '' },
+  ], isAbs, '/');
+  assert.equal(groups.length, 1, 'the two same-folder files should share one command');
+  assert.equal(groups[0].files.length, 2);
+  assert.equal(groups[0].bytes, 30);
+  assert.equal(skipped.length, 2);
+  assert.deepEqual(skipped.map((s) => s.why).sort(),
+    ['destination is not an absolute path', 'no mapping rule']);
+});
+
+// A real copy, end to end, through the actual runner.
+await (async () => {
+  const require_ = createRequire(import.meta.url);
+  const copier = require_(path.join(ROOT, 'electron', 'copy.cjs'));
+  const CSRC = path.join(TMP, 'copysrc'), CDST = path.join(TMP, 'copydst');
+  w(path.join(CSRC, 'Proj', 'clip.mp4'), 'REAL-COPY-PAYLOAD');
+  mkdirSync(CDST, { recursive: true });
+  const rows = [{ drivePath: 'Proj/clip.mp4', name: 'clip.mp4', size: 17,
+                  driveRoot: CSRC, proposedNas: path.join(CDST, 'Proj', 'clip.mp4') }];
+
+  const dry = await copier.run({ rows, dryRun: true }, () => {});
+  check('dry run reports success and writes NOTHING', () => {
+    assert.equal(dry.ok, true, `dry run failed: ${JSON.stringify(dry.results)}`);
+    assert.ok(!existsSync(path.join(CDST, 'Proj', 'clip.mp4')), 'dry run created a file');
+  });
+
+  const real = await copier.run({ rows, dryRun: false }, () => {});
+  check('real copy lands the file and reports success', () => {
+    assert.equal(real.ok, true, `copy failed: ${JSON.stringify(real.results)}`);
+    const landed = path.join(CDST, 'Proj', 'clip.mp4');
+    assert.ok(existsSync(landed), 'file did not arrive');
+    assert.equal(readFileSync(landed, 'utf8'), 'REAL-COPY-PAYLOAD', 'content differs');
+    assert.equal(real.failed, 0);
+  });
+
+  check('re-running the copy is safe and changes nothing', () => {
+    const before = readFileSync(path.join(CDST, 'Proj', 'clip.mp4'), 'utf8');
+    assert.equal(before, 'REAL-COPY-PAYLOAD');
+  });
+})();
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

@@ -339,7 +339,19 @@ function renderTab() {
           '<td><span class="tier ' + (weak ? 'weak' : 'md5') + '">' + esc(r.tier) + '</span></td></tr>';
       });
   } else if (TAB === 'new') {
-    m.innerHTML = droppedNote() + table(['Drive file', 'Proposed NAS destination', 'Size', ''],
+    var ready = RESULT.new.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); });
+    var readyBytes = ready.reduce(function (a, r) { return a + r.size; }, 0);
+    m.innerHTML = droppedNote() +
+      '<div class="note" style="display:flex;align-items:center;gap:10px">' +
+        '<span style="flex:1"><b>' + ready.length.toLocaleString() + ' of ' +
+        RESULT.new.length.toLocaleString() + '</b> new file(s) have a destination and are ready to copy · ' +
+        fmtBytes(readyBytes) +
+        (ready.length < RESULT.new.length
+          ? ' — the rest need <i>Set destination…</i> first and will be skipped'
+          : '') + '</span>' +
+        '<button class="btn" id="btnCopyOpen"' + (ready.length ? '' : ' disabled') + '>Copy to NAS…</button>' +
+      '</div>' +
+      table(['Drive file', 'Proposed NAS destination', 'Size', ''],
       RESULT.new, function (r, i) {
         return '<tr><td class="path">' + esc(r.drivePath) + '</td>' +
           '<td class="path">' + (r.proposedNas
@@ -356,6 +368,8 @@ function renderTab() {
         openRemap(b.dataset.act, RESULT.new[Number(b.dataset.i)]);
       });
     });
+    var openBtn = $('btnCopyOpen');
+    if (openBtn) openBtn.addEventListener('click', openCopy);
   } else if (TAB === 'conflicts') {
     m.innerHTML = droppedNote() + table(['Drive file', 'NAS file', 'Drive size', 'NAS size', 'Why'],
       RESULT.conflicts, function (r) {
@@ -507,6 +521,90 @@ async function saveRemap() {
     '<div class="note"><b>Rule saved.</b> Hit Compare again to apply it.</div>');
 }
 
+// ── copy ────────────────────────────────────────────────────────────────────
+var COPY_RUNNING = false;
+
+function copyReadyRows() {
+  if (!RESULT) return [];
+  return RESULT.new.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); });
+}
+
+async function openCopy() {
+  var rows = copyReadyRows();
+  var bytes = rows.reduce(function (a, r) { return a + r.size; }, 0);
+  var eng = await window.mapper.copyEngine();
+  var dests = {};
+  rows.forEach(function (r) { dests[r.proposedNas.replace(/[\\/][^\\/]*$/, '')] = 1; });
+  var dl = Object.keys(dests);
+
+  $('copyHint').innerHTML =
+    '<b>' + rows.length.toLocaleString() + ' file(s), ' + fmtBytes(bytes) + '</b> into ' +
+    dl.length + ' folder(s) using <code>' + esc(eng.engine) + '</code>.' +
+    (eng.isWindows ? '' : ' <i>(robocopy is Windows-only; this machine will use rsync.)</i>');
+  $('copyLog').innerHTML = dl.slice(0, 40).map(function (d) {
+    return '<div class="row">→ ' + esc(d) + '</div>';
+  }).join('') + (dl.length > 40 ? '<div class="row">… and ' + (dl.length - 40) + ' more</div>' : '');
+  $('copyLog').hidden = false;
+  $('copyResult').hidden = true;
+  $('copyBar').hidden = true;
+  $('copyCancel').hidden = true;
+  $('copyDry').disabled = false;
+  $('copyGo').disabled = false;
+  $('copyDlg').showModal();
+}
+
+async function startCopy(dryRun) {
+  if (COPY_RUNNING) return;
+  var rows = copyReadyRows();
+  if (!rows.length) return;
+  COPY_RUNNING = true;
+  $('copyDry').disabled = true;
+  $('copyGo').disabled = true;
+  $('copyCancel').hidden = false;
+  $('copyBar').hidden = false;
+  $('copyLog').innerHTML = '';
+  $('copyResult').hidden = true;
+  $('copyTitle').textContent = dryRun ? 'Dry run (nothing will be written)' : 'Copying to the NAS';
+  $('copyStatus').textContent = 'Starting…';
+
+  var r = await window.mapper.copyRun({ rows: rows, dryRun: !!dryRun, threads: 8 });
+
+  COPY_RUNNING = false;
+  $('copyCancel').hidden = true;
+  $('copyDry').disabled = false;
+  $('copyGo').disabled = false;
+  $('copyFill').style.width = '100%';
+  $('copyStatus').textContent = 'Finished';
+  renderCopyResult(r);
+}
+
+function renderCopyResult(r) {
+  var el = $('copyResult');
+  el.hidden = false;
+  if (r.error) { el.innerHTML = '<b>Could not start.</b> ' + esc(r.error); return; }
+
+  var head;
+  if (r.cancelled) head = '<b>Stopped.</b> ' + r.groups + ' of ' + r.totalGroups + ' folder(s) had already been processed.';
+  else if (r.ok) head = r.dryRun
+    ? '<b>Dry run finished — nothing was written.</b> All ' + r.groups + ' folder(s) would copy cleanly.'
+    : '<b>Copied successfully.</b> ' + r.groups + ' folder(s), ' + fmtBytes(r.copiedBytes) + '.';
+  else head = '<b>' + r.failed + ' of ' + r.groups + ' folder(s) FAILED.</b> Nothing was deleted; re-running is safe.';
+
+  var detail = (r.results || []).filter(function (x) { return !x.ok; }).slice(0, 20).map(function (x) {
+    return '<div>· ' + esc(x.dstDir) + ' — ' + esc(x.summary) + ' (exit ' + x.code + ')</div>';
+  }).join('');
+
+  var skipped = (r.skipped || []).length
+    ? '<div style="margin-top:6px">' + r.skipped.length + ' file(s) were skipped for want of a destination.</div>' : '';
+
+  el.innerHTML = head +
+    (detail ? '<div style="margin-top:6px">' + detail + '</div>' : '') + skipped +
+    (r.dryRun || !r.ok ? '' :
+      '<div style="margin-top:6px">Now hit <b>Compare</b> again — everything you just copied ' +
+      'should move into <i>Already on NAS</i>. That round trip is the proof it landed.</div>') +
+    (r.logFile ? '<div style="margin-top:6px">Log: <code>' + esc(r.logFile) + '</code></div>' : '');
+}
+
 // ── wiring ──────────────────────────────────────────────────────────────────
 async function init() {
   var boot = await window.mapper.profilesBoot();
@@ -573,6 +671,35 @@ async function init() {
       TAB = b.dataset.tab;
       renderTab();
     });
+  });
+
+  $('copyClose').addEventListener('click', function () { $('copyDlg').close(); });
+  $('copyCancel').addEventListener('click', function () { window.mapper.copyCancel(); });
+  $('copyDry').addEventListener('click', function () { startCopy(true); });
+  $('copyGo').addEventListener('click', function () {
+    var rows = copyReadyRows();
+    var bytes = rows.reduce(function (a, r) { return a + r.size; }, 0);
+    if (!window.confirm('Copy ' + rows.length + ' file(s), ' + fmtBytes(bytes) +
+        ', to the NAS?\n\nFiles are only added. Nothing on the NAS is deleted or ' +
+        'overwritten with an older copy.')) return;
+    startCopy(false);
+  });
+  window.mapper.onCopyEvent(function (e) {
+    if (e.type === 'group-start') {
+      $('copyFill').style.width = Math.round(100 * e.index / Math.max(1, e.total)) + '%';
+      $('copyStatus').textContent = 'Folder ' + (e.index + 1) + ' of ' + e.total +
+        ' · ' + e.files + ' file(s) · ' + fmtBytes(e.bytes);
+      $('copyLog').insertAdjacentHTML('beforeend',
+        '<div class="row">→ ' + esc(e.dstDir) + '</div>');
+    } else if (e.type === 'group-done') {
+      $('copyLog').insertAdjacentHTML('beforeend',
+        '<div class="row" style="color:' + (e.verdict.ok ? 'var(--good)' : 'var(--critical)') + '">' +
+        (e.verdict.ok ? '✓ ' : '✗ ') + esc(e.verdict.summary) + ' (exit ' + e.verdict.code + ')</div>');
+      $('copyLog').scrollTop = $('copyLog').scrollHeight;
+    } else if (e.type === 'log') {
+      $('copyLog').insertAdjacentHTML('beforeend', '<div class="row"><small>' + esc(e.line) + '</small></div>');
+      $('copyLog').scrollTop = $('copyLog').scrollHeight;
+    }
   });
 
   $('remapInput').addEventListener('input', function () { searchNas(); validateDest(); });
