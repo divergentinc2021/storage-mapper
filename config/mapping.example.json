@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "Copy to mapping.json and edit. Windows paths need doubled backslashes.",
+    "nasRoots: every tree that might ALREADY hold this content. Listing the old",
+    "  code-named tree as well as the current one is what stops a third copy.",
+    "driveRoots: Google Drive for Desktop mounts. Metadata is read; contents are",
+    "  never read, so Stream mode stays streamed and nothing is downloaded.",
+    "aliases: folder names that mean the same project under different naming",
+    "  conventions. A code like u0004 or ird0001 is also matched automatically.",
+    "map: longest matching drive prefix wins. The _fromDrive leaf keeps incoming",
+    "  material beside the curated content rather than merged into it, so a bad",
+    "  mapping is one folder to delete instead of an unpickable mess."
+  ],
+
+  "nasRoots": [
+    "Z:\\Projects",
+    "Z:\\Resources\\Projects"
+  ],
+
+  "driveRoots": [
+    "G:\\My Drive",
+    "G:\\Shared drives"
+  ],
+
+  "aliases": [
+    ["u0004_Custom_Haptic_VR_Dentistry", "Preclinical Dental Education VR & Haptics"],
+    ["ird0001_general_vr_development", "IRD0001_R&D_VR_DEVELOPMENT_Unity"],
+    ["IZ_YouTube_Project", "YouTube"],
+    ["Z-Bag_zSpace-20250701T133907Z-1-001", "Z-Bag_zSpace"]
+  ],
+
+  "map": [
+    {
+      "drive": "Shared drives/UIH - UIZ - PMD Backup Documents and Data",
+      "nas": "Projects/Internal UIZ Projects/_fromDrive",
+      "note": "example - replace with the real shared drive names"
+    },
+    {
+      "drive": "My Drive/Loggerhead",
+      "nas": "Projects/Internal UWC Projects/Loggerhead Turtle Project/_fromDrive"
+    }
+  ]
+}

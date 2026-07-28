@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+*.log
+
+# Test fixtures are rebuilt by `npm test`
+test/.tmp/
+
+# Real output and real mapping contain live paths and file names
+out/
+config/mapping.json
+*.csv
+!test/**/*.csv
