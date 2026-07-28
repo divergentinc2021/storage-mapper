@@ -9,6 +9,7 @@ import { walk, looksLikeDriveMount, dedupeRoots } from '../src/walk.mjs';
 import { loadManifest, emptyManifest } from '../src/manifest.mjs';
 import { loadMapping } from '../src/mapping.mjs';
 import { match, nasInternalOverlap } from '../src/match.mjs';
+import { crossOverlap } from '../src/mapplan.mjs';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +27,19 @@ process.on('message', async (msg) => {
     const driveRoots = dd.roots, nasRoots = dn.roots;
     const droppedRoots = [...dd.dropped, ...dn.dropped];
     const manifestPath = raw.manifestPath, mappingObj = raw.mapping;
+
+    // A folder in BOTH lists compares a tree against itself: everything matches
+    // itself and reads as "already on the NAS". Refuse rather than produce a
+    // confidently wrong answer.
+    const clash = crossOverlap(driveRoots, nasRoots);
+    if (clash.length) {
+      throw new Error(
+        'The same folder is in both lists:\n\n' +
+        clash.map((c) => `  • ${c.drive}\n    ${c.how}\n    (NAS: ${c.nas})`).join('\n\n') +
+        '\n\nRemove it from one side. Comparing a folder with itself reports every ' +
+        'file as already on the NAS, and mapping it would copy it onto its own source.'
+      );
+    }
 
     for (const r of nasRoots) {
       if (looksLikeDriveMount(r)) {

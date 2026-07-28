@@ -84,3 +84,94 @@ export function summarise(rows) {
   }
   return s;
 }
+
+/** Normalise a path for comparison across the two lists. */
+function norm(p) {
+  let s = String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? s.toLowerCase() : s;
+}
+
+/**
+ * A path that appears as BOTH a Drive root and a NAS root — or where one
+ * contains the other — is a configuration error, not a preference.
+ *
+ * It compares a tree against itself: every file matches itself and is reported
+ * as "already on the NAS", and if it were ever mapped the copy would target its
+ * own source. Seen for real: "Z:\Internal UWC Projects" was pasted into the
+ * Google Drive list alongside the NAS list.
+ */
+export function crossOverlap(driveRoots, nasRoots) {
+  const bad = [];
+  for (const d of driveRoots) {
+    for (const n of nasRoots) {
+      const nd = norm(d), nn = norm(n);
+      if (nd === nn) bad.push({ drive: d, nas: n, how: 'the same folder is in both lists' });
+      else if (nd.startsWith(nn + '/')) bad.push({ drive: d, nas: n, how: 'the Drive folder is inside the NAS folder' });
+      else if (nn.startsWith(nd + '/')) bad.push({ drive: d, nas: n, how: 'the NAS folder is inside the Drive folder' });
+    }
+  }
+  return bad;
+}
+
+/** Tokens for loose name matching: case, separators and punctuation dropped. */
+function tokens(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+}
+
+function score(a, b) {
+  const A = new Set(tokens(a)), B = new Set(tokens(b));
+  if (!A.size || !B.size) return 0;
+  let hit = 0;
+  for (const t of A) if (B.has(t)) hit++;
+  return hit / Math.max(A.size, B.size);
+}
+
+const base = (p) => String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
+
+/**
+ * Propose one destination per Drive root, by folder-name similarity.
+ *
+ * With several sources a single shared destination is almost always wrong -- it
+ * would flatten "External Client Projects", "Internal UIZ Projects" and
+ * "Meeting_Minutes_Clients" into one folder. Each source gets its own, and the
+ * UI shows the arrows so a wrong pairing is visible before anything is copied.
+ */
+export function suggestPairs(driveRoots, nasRoots) {
+  const used = new Set();
+  return driveRoots.map((d) => {
+    let best = null, bestScore = 0;
+    for (const n of nasRoots) {
+      if (used.has(n)) continue;
+      const s = score(base(d), base(n));
+      if (s > bestScore) { bestScore = s; best = n; }
+    }
+    // Below a half-match the "suggestion" is noise; leave it for a human.
+    if (best && bestScore >= 0.5) { used.add(best); return { drive: d, nas: best, score: bestScore, auto: true }; }
+    return { drive: d, nas: null, score: 0, auto: false };
+  });
+}
+
+/** Assign each row a destination under the pair belonging to ITS drive root. */
+export function assignByPairs(rows, pairs, sep) {
+  const byRoot = new Map(pairs.filter((p) => p.nas).map((p) => [norm(p.drive), p.nas]));
+  let mapped = 0, unmapped = 0;
+  const out = rows.map((r) => {
+    const nas = byRoot.get(norm(r.driveRoot));
+    if (!nas) { unmapped++; return { ...r, proposedNas: '', mappedBy: '(source not mapped)' }; }
+    mapped++;
+    return { ...r, proposedNas: joinDest(nas, r.drivePath, sep), mappedBy: `${base(r.driveRoot)} → ${base(nas)}` };
+  });
+  return { rows: out, mapped, unmapped };
+}
+
+/** Per-source counts and byte totals, for the mapping screen. */
+export function perSource(rows, pairs) {
+  return pairs.map((p) => {
+    const mine = rows.filter((r) => norm(r.driveRoot) === norm(p.drive));
+    return {
+      ...p,
+      files: mine.length,
+      bytes: mine.reduce((a, r) => a + (Number(r.size) || 0), 0),
+    };
+  });
+}

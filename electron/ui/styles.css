@@ -200,3 +200,18 @@ dialog.splash { width: 780px; }
 .filerow .sz { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .selbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; font-size: 12px; }
 .selbar .grow { flex: 1; }
+
+/* Per-source mapping: the arrow row is the whole point — with several sources a
+   single shared destination silently flattens them together. */
+.pairrow { display: grid; grid-template-columns: 1fr 34px 1fr auto; gap: 10px;
+  align-items: center; padding: 9px 10px; border-bottom: 1px solid var(--grid); font-size: 12px; }
+.pairrow:last-child { border-bottom: 0; }
+.pairrow .side { min-width: 0; }
+.pairrow .side b { display: block; font-weight: 600; word-break: break-all; }
+.pairrow .side small { color: var(--muted); word-break: break-all; }
+.pairrow .arrow { text-align: center; font-size: 17px; color: var(--size-5); font-weight: 700; }
+.pairrow.unset .arrow { color: var(--critical); }
+.pairrow.unset .side.to b { color: var(--critical); }
+.pairhead { display: grid; grid-template-columns: 1fr 34px 1fr auto; gap: 10px;
+  padding: 6px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); border-bottom: 1px solid var(--border); }

@@ -367,5 +367,51 @@ check('destination matching is case- and separator-insensitive', () => {
   assert.equal(out[0].state, 'identical', 'Windows paths differ in case and slash; must still match');
 });
 
+check('a folder in BOTH lists is detected (it would compare with itself)', () => {
+  // Exactly what happened in the field: a Z: NAS path pasted into the Drive list.
+  const d = ['H:/Shared drives/UIZ - PROJECTS/External Client Projects', 'Z:/Internal UWC Projects'];
+  const n = ['Z:/External Client Projects', 'Z:/Internal UWC Projects'];
+  const bad = mp.crossOverlap(d, n);
+  assert.equal(bad.length, 1);
+  assert.match(bad[0].how, /same folder is in both lists/);
+  assert.equal(mp.crossOverlap(['H:/a'], ['Z:/b']).length, 0, 'unrelated roots must not trip it');
+  assert.equal(mp.crossOverlap(['Z:/Projects/Sub'], ['Z:/Projects']).length, 1,
+    'a Drive root inside a NAS root is the same mistake');
+});
+
+check('each source is paired with its OWN destination, not one shared folder', () => {
+  const d = ['H:/SD/External Client Projects', 'H:/SD/Internal UIZ Projects', 'H:/SD/Meeting_Minutes_Clients'];
+  const n = ['Z:/External Client Projects', 'Z:/Internal UIZ Projects', 'Z:/Meeting_Minutes_Clients'];
+  const pairs = mp.suggestPairs(d, n);
+  assert.equal(pairs.length, 3);
+  assert.equal(pairs[0].nas, 'Z:/External Client Projects');
+  assert.equal(pairs[1].nas, 'Z:/Internal UIZ Projects');
+  assert.equal(pairs[2].nas, 'Z:/Meeting_Minutes_Clients');
+  // One NAS folder must never be claimed by two sources.
+  assert.equal(new Set(pairs.map((p) => p.nas)).size, 3);
+});
+
+check('a source with no plausible match is left unmapped rather than guessed', () => {
+  const pairs = mp.suggestPairs(['H:/SD/Something Unrelated'], ['Z:/External Client Projects']);
+  assert.equal(pairs[0].nas, null, 'a weak match must not be auto-assigned');
+});
+
+check('rows follow the pairing of their OWN source root', () => {
+  const pairs = [
+    { drive: 'H:/SD/A', nas: 'Z:/A' },
+    { drive: 'H:/SD/B', nas: 'Z:/B' },
+  ];
+  const rows = [
+    { drivePath: 'x/1.mp4', name: '1.mp4', size: 1, driveRoot: 'H:/SD/A' },
+    { drivePath: 'y/2.mp4', name: '2.mp4', size: 2, driveRoot: 'H:/SD/B' },
+    { drivePath: 'z/3.mp4', name: '3.mp4', size: 3, driveRoot: 'H:/SD/C' },
+  ];
+  const r = mp.assignByPairs(rows, pairs, '/');
+  assert.equal(r.rows[0].proposedNas, 'Z:/A/x/1.mp4');
+  assert.equal(r.rows[1].proposedNas, 'Z:/B/y/2.mp4', 'B files must not land under A');
+  assert.equal(r.rows[2].proposedNas, '', 'an unmapped source must not be given a destination');
+  assert.deepEqual([r.mapped, r.unmapped], [2, 1]);
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

@@ -143,6 +143,31 @@ check('UNC destinations count as absolute', () => {
 });
 
 
+// ── the renderer and the HTML must agree ────────────────────────────────────
+check('every element the renderer binds exists in the HTML or is created by it', () => {
+  /*
+    Catches the dead-handler class of bug: a button removed from index.html while
+    its addEventListener stays, so init() throws on a null and every later
+    binding in that function silently never happens. An id is legitimate if the
+    HTML declares it OR app.js builds it (the copy-review buttons are rendered
+    into innerHTML and bound immediately after).
+  */
+  const html = readFileSync(path.join(ROOT, 'electron', 'ui', 'index.html'), 'utf8');
+  const bound = new Set();
+  for (const m of src.matchAll(/\$\('([A-Za-z0-9_]+)'\)\s*\.addEventListener/g)) bound.add(m[1]);
+  assert.ok(bound.size > 20, 'expected the renderer to bind many ids');
+  const missing = [...bound].filter((id) =>
+    !html.includes(`id="${id}"`) && !src.includes(`id="${id}"`));
+  assert.deepEqual(missing, [], `bound but never created: ${missing.join(', ')}`);
+});
+
+check('no reference survives to a removed global', () => {
+  // MAP_TARGET belonged to the old single-destination design; a stale handler
+  // still assigned it and would have thrown ReferenceError on click.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/\bMAP_TARGET\b/.test(code), 'MAP_TARGET is gone; a reference remains');
+});
+
 // ── Electron-specific traps ─────────────────────────────────────────────────
 check('the renderer never calls window.prompt (Electron does not implement it)', () => {
   // This is why the first profile save silently did nothing: prompt() returns

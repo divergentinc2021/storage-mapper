@@ -136,6 +136,10 @@ var FEATURES = [
       d: 'Incoming against existing. Same name and byte count is skipped; a size mismatch is never overwritten by default.' },
     { ico: 'H', t: 'Copy history', since: '0.5.0',
       d: 'Every run journalled — what, by whom, and the engine verdict per folder. Volume rollback is QNAP snapshots; this is the per-run detail.' },
+    { ico: '⇄', t: 'Per-source mapping with arrows', since: '0.6.0',
+      d: 'Each Google Drive folder is paired with its OWN NAS folder and the arrows are shown. One shared destination would have flattened separate project trees into a single folder.' },
+    { ico: '⚠', t: 'Same folder in both lists is refused', since: '0.6.0',
+      d: 'A path in the Drive AND NAS lists compares a tree with itself — everything reads as already on the NAS. Compare now stops and says which one.' },
     { ico: '!', t: 'Profile saving fixed', since: '0.5.1',
       d: 'Electron does not implement window.prompt, so asking for a profile name returned nothing and the save was silently skipped. It now uses a real dialog and confirms the file it wrote.' },
   ]},
@@ -702,62 +706,129 @@ function syncStageButtons() {
 
 function openMap() {
   if (!RESULT || !RESULT.new.length) return;
-  MAP_TARGET = NAS_ROOTS.length === 1 ? NAS_ROOTS[0] : null;
+  MAP_PAIRS = suggestPairs(DRIVE_ROOTS, NAS_ROOTS);
   renderMap();
   $('mapDlg').showModal();
 }
 
-var MAP_TARGET = null;
+var MAP_PAIRS = [];
+
+function baseName(p) {
+  return String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
+}
+function normPath(p) {
+  var v = String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return SEP === '\\' ? v.toLowerCase() : v;
+}
+
+/**
+ * Suggest one destination PER SOURCE by folder-name similarity.
+ * With several sources a single shared destination would flatten
+ * "External Client Projects", "Internal UIZ Projects" and "Meeting_Minutes_Clients"
+ * into one folder — the mess this screen exists to prevent.
+ */
+function suggestPairs(drives, nas) {
+  var toks = function (n) {
+    return String(baseName(n)).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  };
+  var sim = function (a, b) {
+    var A = toks(a), B = toks(b);
+    if (!A.length || !B.length) return 0;
+    var hit = 0;
+    A.forEach(function (t) { if (B.indexOf(t) !== -1) hit++; });
+    return hit / Math.max(A.length, B.length);
+  };
+  var used = {};
+  return drives.map(function (d) {
+    var best = null, bestScore = 0;
+    nas.forEach(function (n) {
+      if (used[n]) return;
+      var sc = sim(d, n);
+      if (sc > bestScore) { bestScore = sc; best = n; }
+    });
+    if (best && bestScore >= 0.5) { used[best] = 1; return { drive: d, nas: best, auto: true }; }
+    return { drive: d, nas: null, auto: false };
+  });
+}
+
+function rowsForSource(root) {
+  return RESULT.new.filter(function (r) { return normPath(r.driveRoot) === normPath(root); });
+}
 
 function renderMap() {
-  var n = RESULT.new.length;
-  if (!MAP_TARGET && NAS_ROOTS.length > 1) {
-    $('mapHint').innerHTML = '<b>' + n.toLocaleString() + '</b> new file(s). ' +
-      'You compared against more than one NAS folder — pick which one they belong under.';
-    $('mapNote').innerHTML = '';
-    $('mapPreview').innerHTML = NAS_ROOTS.map(function (r, i) {
-      return '<div class="row" data-nas="' + i + '">' + esc(r) + '</div>';
+  var total = RESULT.new.length;
+  var unset = MAP_PAIRS.filter(function (p) { return !p.nas; });
+  var mappedFiles = MAP_PAIRS.reduce(function (a, p) {
+    return a + (p.nas ? rowsForSource(p.drive).length : 0);
+  }, 0);
+
+  $('mapHint').innerHTML =
+    '<b>' + mappedFiles.toLocaleString() + ' of ' + total.toLocaleString() + '</b> new file(s) have a destination. ' +
+    'Every source is mapped separately — check each arrow before continuing.';
+
+  $('mapNote').innerHTML = unset.length
+    ? '<b>' + unset.length + ' source(s) have no destination.</b> Their files will be left out of the copy ' +
+      'rather than guessed at. Set one, or leave them for later.'
+    : 'Files keep the folder structure they have in Drive and land <b>under</b> the destination. ' +
+      'They are not merged into existing sub-folders, and nothing existing is touched.';
+
+  $('mapPreview').innerHTML =
+    '<div class="pairhead"><span>From (Google Drive)</span><span></span><span>To (NAS)</span><span></span></div>' +
+    MAP_PAIRS.map(function (p, i) {
+      var mine = rowsForSource(p.drive);
+      var bytes = mine.reduce(function (a, r) { return a + r.size; }, 0);
+      return '<div class="pairrow' + (p.nas ? '' : ' unset') + '">' +
+        '<span class="side"><b>' + esc(baseName(p.drive)) + '</b>' +
+          '<small>' + esc(p.drive) + '</small>' +
+          '<small>' + mine.length.toLocaleString() + ' new file(s) · ' + fmtBytes(bytes) + '</small></span>' +
+        '<span class="arrow">→</span>' +
+        '<span class="side to"><b>' + (p.nas ? esc(baseName(p.nas)) : 'not set') + '</b>' +
+          '<small>' + (p.nas ? esc(p.nas) : 'these files will be skipped') + '</small></span>' +
+        '<button class="btn sm" data-pair="' + i + '">' + (p.nas ? 'Change…' : 'Set…') + '</button>' +
+        '</div>';
     }).join('');
-    $('mapPreview').querySelectorAll('[data-nas]').forEach(function (el) {
-      el.addEventListener('click', function () {
-        MAP_TARGET = NAS_ROOTS[Number(el.dataset.nas)];
-        renderMap();
-      });
+
+  $('mapPreview').querySelectorAll('button[data-pair]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      var i = Number(b.dataset.pair);
+      var picked = await window.mapper.pickFolder(
+        'Destination for ' + baseName(MAP_PAIRS[i].drive), false);
+      if (picked && picked.length) { MAP_PAIRS[i].nas = picked[0]; renderMap(); }
     });
-    $('mapConfirm').disabled = true;
-    return;
-  }
-  $('mapConfirm').disabled = !MAP_TARGET;
-  $('mapHint').innerHTML = '<b>' + n.toLocaleString() + '</b> new file(s) will go under ' +
-    '<b>' + esc(MAP_TARGET || '(nothing chosen)') + '</b>, keeping the folder structure they have in Drive.';
-  // Say the awkward part out loud rather than let it surprise anyone.
-  $('mapNote').innerHTML =
-    'They are <b>not</b> merged into existing sub-folders — the two trees do not line up ' +
-    '(Drive <code>Shoot_…/Pictures</code> vs NAS <code>360 Footage/Shoot_…_SRC/Pictures/Processed</code>), ' +
-    'and guessing would be worse than predictable. <b>Nothing existing is touched</b>; you can file ' +
-    'them afterwards.';
-  var ex = RESULT.new.slice(0, 6);
-  $('mapPreview').innerHTML = ex.map(function (r) {
-    return '<div class="row">' + esc(r.drivePath) +
-      '<small>→ ' + esc(joinDest(MAP_TARGET, r.drivePath)) + '</small></div>';
-  }).join('') + (n > ex.length ? '<div class="row"><small>… and ' + (n - ex.length) + ' more</small></div>' : '');
+  });
+
+  $('mapConfirm').disabled = mappedFiles === 0;
+  $('mapConfirm').textContent = unset.length
+    ? 'Map ' + mappedFiles.toLocaleString() + ', skip the rest'
+    : 'Confirm all ' + mappedFiles.toLocaleString();
 }
 
 function applyMap() {
-  if (!MAP_TARGET) return;
+  var byRoot = {};
+  MAP_PAIRS.forEach(function (p) { if (p.nas) byRoot[normPath(p.drive)] = p.nas; });
+
+  // Each row follows the pairing of ITS OWN source root. A shared destination
+  // would merge separate project trees into one folder.
   MAPPED = RESULT.new.map(function (r) {
+    var nas = byRoot[normPath(r.driveRoot)];
+    if (!nas) return Object.assign({}, r, { proposedNas: '', mappedBy: '(source not mapped)' });
     return Object.assign({}, r, {
-      proposedNas: joinDest(MAP_TARGET, r.drivePath),
-      mappedBy: 'mapped to ' + MAP_TARGET,
+      proposedNas: joinDest(nas, r.drivePath),
+      mappedBy: baseName(r.driveRoot) + ' → ' + baseName(nas),
     });
   });
+
+  var ok = MAPPED.filter(function (r) { return r.proposedNas; }).length;
+  var skipped = MAPPED.length - ok;
   $('mapDlg').close();
-  syncStageButtons();
   RESULT.new = MAPPED;      // so the New tab and the exported plan agree
+  syncStageButtons();
   renderTab();
   $('main').insertAdjacentHTML('afterbegin',
-    '<div class="note"><b>Mapped ' + MAPPED.length.toLocaleString() + ' file(s)</b> to ' +
-    esc(MAP_TARGET) + '. <b>Copy…</b> is now available.</div>');
+    '<div class="note"><b>Mapped ' + ok.toLocaleString() + ' file(s)</b> across ' +
+    MAP_PAIRS.filter(function (p) { return p.nas; }).length + ' source(s)' +
+    (skipped ? ' · <b>' + skipped.toLocaleString() + ' skipped</b> (source not mapped)' : '') +
+    '. <b>Copy…</b> is now available.</div>');
 }
 
 // ── copy ────────────────────────────────────────────────────────────────────
@@ -996,10 +1067,6 @@ async function init() {
   $('btnMapTop').addEventListener('click', openMap);
   $('mapCancel').addEventListener('click', function () { $('mapDlg').close(); });
   $('mapConfirm').addEventListener('click', applyMap);
-  $('mapNew').addEventListener('click', async function () {
-    var p = await window.mapper.pickFolder('Choose where the new files should go', false);
-    if (p && p.length) { MAP_TARGET = p[0]; renderMap(); }
-  });
   $('copyClose').addEventListener('click', function () { $('copyDlg').close(); });
   $('copyCancel').addEventListener('click', function () { window.mapper.copyCancel(); });
   $('copyDry').addEventListener('click', function () { startCopy(true); });
