@@ -43,6 +43,82 @@ function baseOf(p) {
   return parts[parts.length - 1] || '';
 }
 
+// ── feature sheet ───────────────────────────────────────────────────────────
+/*
+  Shown once per version. `since` drives the NEW badge automatically, so the list
+  is the single place a feature is described and there is no separate changelog
+  to forget to update.
+*/
+var APP_VERSION = '';
+var FEATURES = [
+  { group: 'Compare', items: [
+    { ico: '=', t: 'Already on NAS',
+      d: 'Finds Drive files the NAS already holds — including ones RENAMED between the two, matched on checksum rather than name.' },
+    { ico: '+', t: 'New, with a destination',
+      d: 'What is genuinely missing, mapped into your existing project taxonomy.' },
+    { ico: '!', t: 'Conflicts',
+      d: 'Same name and size but different content. Never silently treated as a duplicate.' },
+    { ico: 'G', t: 'Google-native stubs',
+      d: 'Docs, Sheets and Slides are link stubs on disk, not documents. Flagged as export-only — copying one archives a dead link.' },
+    { ico: '~', t: 'NAS-internal overlap',
+      d: 'The same file already sitting in two of your NAS trees.' },
+  ]},
+  { group: 'Accuracy', items: [
+    { ico: '#', t: 'Exact mode with a Drive manifest',
+      d: 'Checksums come from the Drive API for free. Without the manifest, matching falls back to size + name and a renamed copy looks new.' },
+    { ico: 'x', t: 'The Drive mount is never hashed',
+      d: 'In Stream mode reading a file downloads it. Only NAS files whose size collides with a Drive file are hashed.' },
+    { ico: 'v', t: 'Nested folders collapsed', since: '0.3.0',
+      d: 'Choosing a folder and one inside it used to walk the inner one twice and double every count.' },
+  ]},
+  { group: 'Teaching it', items: [
+    { ico: 'L', t: 'Already on NAS…',
+      d: 'Link a file to the one it really duplicates; the two parent folders are recorded as the same project, so the rest follow.' },
+    { ico: 'D', t: 'Set destination… with Browse', since: '0.3.1',
+      d: 'Pick a real folder. Relative paths are refused — they would be created next to the plan instead of on the NAS.' },
+    { ico: 'P', t: 'Profiles', since: '0.3.0',
+      d: 'Save a whole setup and mark one default. Folders stay local; rules are portable.' },
+    { ico: 'S', t: 'Shared team profile', since: '0.3.0',
+      d: 'Point at a profile on the NAS. When a colleague updates it you get a diff and choose: load, keep yours, or start fresh.' },
+  ]},
+  { group: 'Copying', items: [
+    { ico: '>', t: 'Copy to NAS', since: '0.4.0',
+      d: 'Runs robocopy (rsync off Windows) from the app, in the background, with per-folder progress.' },
+    { ico: 'T', t: 'Dry run first', since: '0.4.0',
+      d: 'Passes /L so robocopy reports exactly what it would do and writes nothing.' },
+    { ico: 'OK', t: 'An honest verdict', since: '0.4.0',
+      d: 'Robocopy exit codes are a bitmask where non-zero is usually success (1 = files copied). Success is under 8; failures name the folder and reason.' },
+    { ico: 'V', t: 'Copy button on every tab', since: '0.4.1',
+      d: 'It used to live only on the New tab, which made the feature look missing from anywhere else.' },
+    { ico: '#', t: 'Version shown in the header', since: '0.4.1',
+      d: 'So "the feature is missing" and "you are on an older build" stop looking identical.' },
+  ]},
+];
+
+function renderSplash() {
+  var cur = APP_VERSION;
+  $('splashVer').textContent = 'v' + cur;
+  var newCount = 0;
+  var html = FEATURES.map(function (g) {
+    return '<div class="fgroup"><h3>' + esc(g.group) + '</h3>' + g.items.map(function (f) {
+      var isNew = f.since && f.since === cur;
+      if (isNew) newCount++;
+      return '<div class="frow"><span class="ico">' + esc(f.ico) + '</span>' +
+        '<span class="txt"><b>' + esc(f.t) + '</b> — <small>' + esc(f.d) + '</small></span>' +
+        (isNew ? '<span class="newtag">NEW</span>' : '') + '</div>';
+    }).join('') + '</div>';
+  }).join('');
+
+  $('splashBody').innerHTML =
+    '<div class="safetybar"><b>It cannot delete anything.</b> Compare only reads. The copy adds ' +
+    'files and never overwrites a newer one — <code>/MIR</code>, <code>/PURGE</code> and ' +
+    '<code>--delete</code> are never used.</div>' +
+    (newCount ? '<div class="note"><b>' + newCount + ' new in v' + esc(cur) + '</b> — marked below.</div>' : '') +
+    html;
+}
+
+function openSplash() { renderSplash(); $('splashDlg').showModal(); }
+
 // ── profiles ────────────────────────────────────────────────────────────────
 /*
   A profile has two halves and they are treated very differently:
@@ -291,7 +367,26 @@ async function runCompare() {
   DROPPED = res.droppedRoots || [];
   $('btnExport').disabled = false;
   renderCounts();
+  syncCopyButton();
   renderTab();
+}
+
+/**
+ * The Copy button lives in the header so it is reachable from every tab. It was
+ * originally only on the New tab, which made it look like the feature did not
+ * exist unless you happened to be standing on the right tab.
+ */
+function syncCopyButton() {
+  var btn = $('btnCopyTop');
+  if (!btn) return;
+  var ready = copyReadyRows();
+  var unmapped = RESULT ? RESULT.new.length - ready.length : 0;
+  btn.disabled = !ready.length;
+  btn.textContent = ready.length ? 'Copy ' + ready.length.toLocaleString() + ' to NAS…' : 'Copy to NAS…';
+  btn.title = !RESULT ? 'Run a comparison first'
+    : ready.length ? ready.length + ' new file(s) have an absolute destination'
+    : (unmapped ? 'All ' + unmapped + ' new file(s) still need a destination — use Set destination… on the New tab'
+                : 'Nothing new to copy: everything is already on the NAS');
 }
 
 function renderCounts() {
@@ -514,6 +609,7 @@ async function saveRemap() {
     }
   }
   await window.mapper.saveMapping(MAPPING);
+  syncCopyButton();
   $('remapDlg').close();
   // The rule only takes effect on a re-run, so say so rather than implying the
   // table on screen already reflects it.
@@ -607,6 +703,26 @@ function renderCopyResult(r) {
 
 // ── wiring ──────────────────────────────────────────────────────────────────
 async function init() {
+  var seenVersion = null;
+  try {
+    var info = await window.mapper.appInfo();
+    APP_VERSION = info.version;
+    $('appVer').textContent = 'v' + info.version;
+    $('appVer').title = 'Electron ' + info.electron + ' · copy engine: ' + info.engine;
+    var st = await window.mapper.profilesSettings();
+    seenVersion = st.splashSeenVersion || null;
+  } catch (e) {
+    $('appVer').textContent = 'v?';
+  }
+  $('btnWhatsNew').addEventListener('click', openSplash);
+  $('splashGo').addEventListener('click', async function () {
+    if ($('splashHide').checked) await window.mapper.splashSeen(APP_VERSION);
+    $('splashDlg').close();
+  });
+  // Shown on a fresh install and after every upgrade, so a new feature is never
+  // silently added to a UI the user already thinks they know.
+  var showSplash = seenVersion !== APP_VERSION;
+
   var boot = await window.mapper.profilesBoot();
   applyProfileToUi(boot.profile || blankProfile());
   PROFILE_FILE = boot.defaultFile || null;
@@ -633,7 +749,8 @@ async function init() {
   $('sharedKeep').addEventListener('click', function () { sharedDecision('keep'); });
   $('sharedFresh').addEventListener('click', function () { sharedDecision('fresh'); });
 
-  if (boot.shared && boot.shared.status === 'updated') showSharedDialog(boot.shared);
+  if (showSplash) openSplash();
+  else if (boot.shared && boot.shared.status === 'updated') showSharedDialog(boot.shared);
 
   $('btnDrive').addEventListener('click', async function () {
     var p = await window.mapper.pickFolder('Choose your Google Drive folder', true);
@@ -673,6 +790,7 @@ async function init() {
     });
   });
 
+  $('btnCopyTop').addEventListener('click', openCopy);
   $('copyClose').addEventListener('click', function () { $('copyDlg').close(); });
   $('copyCancel').addEventListener('click', function () { window.mapper.copyCancel(); });
   $('copyDry').addEventListener('click', function () { startCopy(true); });

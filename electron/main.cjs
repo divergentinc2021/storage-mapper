@@ -135,6 +135,15 @@ ipcMain.handle('profiles-load', async (_e, file) => profiles.load(app, file));
 ipcMain.handle('profiles-delete', async (_e, file) => { profiles.remove(app, file); return true; });
 ipcMain.handle('profiles-set-default', async (_e, file) => { profiles.setDefault(app, file); return true; });
 ipcMain.handle('profiles-settings', async () => profiles.getSettings(app));
+ipcMain.handle('splash-seen', async (_e, version) => {
+  const fsx = require('node:fs');
+  const f = path.join(app.getPath('userData'), 'settings.json');
+  let s = {};
+  try { s = JSON.parse(fsx.readFileSync(f, 'utf8')); } catch { /* first run */ }
+  s.splashSeenVersion = version;
+  fsx.writeFileSync(f, JSON.stringify(s, null, 2) + '\n');
+  return true;
+});
 
 /** Default profile plus any pending shared-profile update, read at launch. */
 ipcMain.handle('profiles-boot', async () => {
@@ -204,3 +213,10 @@ ipcMain.handle('copy-run', async (_e, opts) => {
 
 ipcMain.handle('copy-cancel', async () => { copier.cancel(); return true; });
 ipcMain.handle('copy-engine', async () => ({ engine: copier.engine(), isWindows: copier.IS_WIN }));
+
+ipcMain.handle('app-info', async () => ({
+  version: app.getVersion(),
+  engine: copier.engine(),
+  isWindows: copier.IS_WIN,
+  electron: process.versions.electron,
+}));

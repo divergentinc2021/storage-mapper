@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('mapper', {
   profilesSetShared: (pick) => ipcRenderer.invoke('profiles-set-shared', pick),
   profilesSharedApplied: (hash, shared) => ipcRenderer.invoke('profiles-shared-applied', { hash, shared }),
   profilesSettings: () => ipcRenderer.invoke('profiles-settings'),
+  splashSeen: (v) => ipcRenderer.invoke('splash-seen', v),
+  appInfo: () => ipcRenderer.invoke('app-info'),
   copyRun: (opts) => ipcRenderer.invoke('copy-run', opts),
   copyCancel: () => ipcRenderer.invoke('copy-cancel'),
   copyEngine: () => ipcRenderer.invoke('copy-engine'),

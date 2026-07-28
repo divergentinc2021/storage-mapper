@@ -156,3 +156,33 @@ header select {
   background: var(--plane); border: 1px solid var(--serious); color: var(--text-secondary);
 }
 .warn b { color: var(--text-primary); }
+
+/* Version is in the header on purpose: without it, "the feature is missing" and
+   "you are on an older build" look identical from a screenshot. */
+h1 .ver {
+  font-size: 11px; font-weight: 600; color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* Startup feature sheet. Its job is to answer "which build am I on and what can
+   it do" without needing to hunt through tabs. */
+dialog.splash { width: 780px; }
+.splashhead { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+.logo.big { width: 46px; height: 46px; }
+.splashhead h2 { font-size: 17px; margin: 0; }
+.splashhead h2 span { font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; margin-left: 4px; vertical-align: middle; }
+.fgroup { margin-bottom: 12px; }
+.fgroup h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 0 0 6px; }
+.frow { display: flex; gap: 9px; padding: 5px 0; font-size: 12.5px; align-items: baseline; }
+.frow .ico { flex: none; width: 16px; text-align: center; color: var(--size-5); }
+.frow .txt { flex: 1; }
+.frow .txt b { font-weight: 600; }
+.frow small { color: var(--text-secondary); }
+.newtag { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  color: #fff; background: var(--size-6); border-radius: 99px; padding: 1px 7px; }
+.safetybar { font-size: 12px; padding: 9px 11px; border-radius: 8px; margin: 4px 0 12px;
+  background: var(--plane); border: 1px solid var(--good); color: var(--text-secondary); }
+.safetybar b { color: var(--text-primary); }

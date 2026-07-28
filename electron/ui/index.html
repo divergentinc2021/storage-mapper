@@ -22,13 +22,15 @@
       <rect x="304" y="294" width="112" height="122" rx="10" opacity=".52"/>
     </g>
   </svg>
-  <h1>Storage Mapper <span>· Drive → NAS</span></h1>
+  <h1>Storage Mapper <span>· Drive → NAS</span> <span class="ver" id="appVer"></span></h1>
   <div class="spacer"></div>
   <label style="font-size:11px;color:var(--muted)">PROFILE</label>
   <select id="profileSel" title="Saved profiles"><option value="">(unsaved)</option></select>
   <button class="btn" id="btnProfSave" title="Save changes to this profile">Save</button>
   <button class="btn" id="btnProfMenu" title="Profile actions">⋯</button>
+  <button class="btn primary" id="btnCopyTop" disabled title="Run a comparison first">Copy to NAS…</button>
   <button class="btn" id="btnExport" disabled>Export reports…</button>
+  <button class="btn" id="btnWhatsNew" title="What's new">?</button>
   <button class="btn" id="btnTheme" title="Toggle theme">◐</button>
 </header>
 
@@ -77,6 +79,33 @@
     Nothing is copied, moved or deleted — this only produces a plan.
   </div>
 </main>
+
+<dialog id="splashDlg" class="splash">
+  <div class="splashhead">
+    <svg class="logo big" viewBox="0 0 512 512" aria-hidden="true">
+      <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#a40a1b"/><stop offset=".55" stop-color="#d34b49"/>
+        <stop offset="1" stop-color="#eed4d1"/></linearGradient></defs>
+      <rect width="512" height="512" rx="114" fill="url(#sg)"/>
+      <g fill="#fff">
+        <rect x="84" y="128" width="146" height="256" rx="14"/>
+        <rect x="230" y="234" width="52" height="44" rx="6" opacity=".9"/>
+        <rect x="282" y="128" width="146" height="256" rx="14" opacity=".62"/>
+      </g>
+    </svg>
+    <div>
+      <h2>Storage Mapper <span id="splashVer"></span></h2>
+      <p class="hint">Plan a Google Drive → NAS migration without duplicating anything.</p>
+    </div>
+  </div>
+  <div id="splashBody"></div>
+  <div class="dlgfoot">
+    <label style="margin-right:auto;font-size:12px;color:var(--text-secondary)">
+      <input type="checkbox" id="splashHide"> Don't show this again for this version
+    </label>
+    <button class="btn primary" id="splashGo">Get started</button>
+  </div>
+</dialog>
 
 <dialog id="copyDlg">
   <h2 id="copyTitle">Copy to the NAS</h2>
