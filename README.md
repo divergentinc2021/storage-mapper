@@ -198,3 +198,37 @@ app on your machine. *Export (rules only…)* is the safe thing to put on the NA
 Choosing `H:\Shared drives` **and** the individual shared drives under it would
 walk each of those twice and double every count. Nested roots are collapsed
 before walking and the skipped ones are listed above the results.
+
+## After Compare — what to actually do
+
+Compare produces a **plan**, not a copy. The workflow is:
+
+1. **Read the five tabs.** *Already on NAS* is the number that matters — it is
+   what you would otherwise have duplicated.
+2. **Fix what it got wrong.** In *New*, use **Already on NAS…** for things it
+   missed, and **Set destination… → Browse…** for anything unmapped.
+3. **Compare again.** Rules only take effect on a re-run.
+4. **Export reports…** — writes the CSVs plus `copy-plan.bat` / `copy-plan.sh`.
+5. **Run the copy plan yourself** from a terminal on the machine that can see
+   both `H:` and `Z:`. It logs beside itself as `storage-mapper-copy.log`.
+6. **Compare once more to verify.** Everything you copied should now appear under
+   *Already on NAS*. That round trip is the proof the copy landed — not the
+   absence of errors.
+7. **Then, and only then**, deal with the Drive side: export the natives, and use
+   Google Drive Storage Explorer to trash what is now safely on the NAS.
+
+### Why the app does not press the button
+
+`robocopy` is restartable, resumable, long-path safe and logs everything. A copy
+engine written here would be strictly worse, and this is in some cases the only
+copy of the studio's work. The plan is deliberately additive — `/XO` and
+`--ignore-existing`, never `/MIR`, never `--delete` — so the worst a bad run can
+do is copy something twice.
+
+### Destinations must be absolute
+
+`Z:\Projects\…` or `\\UIZ-NAS\Projects\…`, not `Projects\…`. A relative
+destination would be created next to wherever the plan is run instead of on the
+NAS. The dialog now refuses to save one, **Browse…** picks a real folder, and any
+row that still lacks an absolute destination is written into the plan as a
+commented skip with the reason — never as a command that would misfire.

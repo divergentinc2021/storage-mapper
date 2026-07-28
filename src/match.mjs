@@ -119,6 +119,8 @@ export async function match({ driveFiles, nasFiles, manifest, mapping, onProgres
 
     out.new.push({
       drivePath: f.rel, name: f.base, size: f.size,
+      // The root is needed to rebuild an absolute source path in the copy plan.
+      driveRoot: f.root, driveAbs: f.abs,
       proposedNas: dest ? dest.nas : '', mappedBy: dest ? dest.rule : '(unmapped)',
     });
   }

@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { dedupeRoots } from '../src/walk.mjs';
+import { writeCopyPlan, isAbsoluteDest } from '../src/report.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -78,7 +79,7 @@ w(cfg, JSON.stringify({
   nasRoots: [NAS, NAS_OLD],
   driveRoots: [DRIVE],
   aliases: [['u0004_Custom_Haptic_VR_Dentistry', 'Preclinical Dental Education VR & Haptics']],
-  map: [{ drive: 'Dental VR', nas: 'Projects/Internal UWC Projects/Preclinical Dental Education VR & Haptics/_fromDrive' }],
+  map: [{ drive: 'Dental VR', nas: path.join(NAS, 'Internal UWC Projects', 'Preclinical Dental Education VR & Haptics', '_fromDrive') }],
 }, null, 2));
 
 // ---- run ------------------------------------------------------------------
@@ -166,7 +167,39 @@ check('a copy plan was produced and copies only new files', () => {
   assert.ok(bat.includes('newclip.mp4'), 'plan omits the new file');
   assert.ok(!bat.includes('scan_001.mp4'), 'plan would re-copy a duplicate');
   assert.ok(!bat.includes('Budget.gsheet'), 'plan would copy a native stub');
-  assert.ok(!/\/MIR\b/.test(bat), 'plan must never mirror (would delete on the NAS)');
+  // Check the COMMANDS, not the whole file: the header comment mentions /MIR.
+  const cmds = bat.split(/\r?\n/).filter((l) => l.startsWith('robocopy'));
+  assert.ok(cmds.length, 'no robocopy command emitted');
+  assert.ok(!cmds.some((c) => /\/MIR\b/.test(c)), 'plan must never mirror (would delete on the NAS)');
+  assert.ok(!/--delete/.test(readFileSync(path.join(OUT, 'copy-plan.sh'), 'utf8')),
+    'shell plan must never delete');
+});
+
+check('copy plan paths are ABSOLUTE on both sides', () => {
+  const bat = readFileSync(path.join(OUT, 'copy-plan.bat'), 'utf8');
+  const cmd = bat.split(/\r?\n/).find((l) => l.startsWith('robocopy'));
+  assert.ok(cmd, 'no robocopy command emitted');
+  const quoted = cmd.match(/"([^"]+)"/g).map((q) => q.slice(1, -1));
+  const [src, dst] = quoted;
+  // A relative destination would create the tree next to the .bat, not on the NAS.
+  assert.ok(isAbsoluteDest(src.split('\\').join('/')), `source not absolute: ${src}`);
+  assert.ok(isAbsoluteDest(dst.split('\\').join('/')), `destination not absolute: ${dst}`);
+  assert.ok(dst.includes('_fromDrive'), 'destination lost the mapped folder');
+});
+
+check('a relative destination is SKIPPED with a reason, never emitted as a command', () => {
+  const rel = { new: [{ drivePath: 'X/a.mp4', name: 'a.mp4', size: 1,
+                        driveRoot: '/tmp/src', proposedNas: 'Projects/relative/dest' }],
+                duplicates: [], conflicts: [], natives: [], errors: [], stats: {} };
+  const dir = path.join(TMP, 'relplan');
+  mkdirSync(dir, { recursive: true });
+  const r = writeCopyPlan(dir, rel, '/tmp/src');
+  const bat = readFileSync(path.join(dir, 'copy-plan.bat'), 'utf8');
+  assert.equal(r.dirs, 0, 'a relative destination must produce no command');
+  assert.equal(r.skipped, 1);
+  assert.ok(/REM .*\[destination is not an absolute path\] X\/a\.mp4/.test(bat),
+    'skip reason missing from the plan');
+  assert.ok(!/^robocopy/m.test(bat), 'emitted a robocopy despite a relative destination');
 });
 
 check('nested roots collapse, so a folder inside another is not walked twice', () => {

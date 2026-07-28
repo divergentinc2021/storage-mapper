@@ -44,7 +44,12 @@ export function loadMapping(file) {
   }
 
   const map = (cfg.map || [])
-    .map((m) => ({ drive: trimSlashes(m.drive), nas: trimSlashes(m.nas), note: m.note || '' }))
+    // `drive` is a relative prefix inside the mount, so trimming slashes is right.
+    // `nas` is a DESTINATION and must stay absolute: trimming its leading slash
+    // turned "/Volumes/NAS/..." into "Volumes/NAS/..." and would have stripped the
+    // leading "\\" off a UNC path, so the copy plan silently pointed at a relative
+    // folder next to wherever it was run.
+    .map((m) => ({ drive: trimSlashes(m.drive), nas: normalizeDest(m.nas), note: m.note || '' }))
     .sort((a, b) => b.drive.length - a.drive.length); // longest prefix wins
 
   return {
@@ -77,4 +82,12 @@ export function loadMapping(file) {
 
 function trimSlashes(s) {
   return String(s || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+/** Destinations keep their root: drive letter, UNC prefix or leading slash. */
+function normalizeDest(s) {
+  const v = String(s || '').trim();
+  if (!v) return '';
+  if (/^\\\\/.test(v)) return v.replace(/[\\/]+$/, '');       // \\NAS\share
+  return v.replace(/\\/g, '/').replace(/\/+$/, '');           // C:/... or /mnt/...
 }

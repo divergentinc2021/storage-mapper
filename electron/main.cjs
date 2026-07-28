@@ -84,7 +84,10 @@ ipcMain.handle('compare', async (_e, payload) => new Promise((resolve) => {
   child.on('message', (m) => {
     if (m.type === 'progress') { if (win) win.webContents.send('progress', m); return; }
     settled = true;
-    if (m.type === 'done') { lastRun = { result: m.result, overlap: m.overlap, nasIndex: m.nasIndex }; }
+    if (m.type === 'done') {
+      lastRun = { result: m.result, overlap: m.overlap, nasIndex: m.nasIndex,
+                  driveRoot: (payload.driveRoots || [])[0] || '' };
+    }
     resolve(m);
     child.kill();
   });

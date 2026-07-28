@@ -103,7 +103,11 @@
 <dialog id="remapDlg">
   <h2 id="remapTitle">Remap</h2>
   <p class="hint" id="remapHint"></p>
-  <input type="text" id="remapInput" placeholder="Search the NAS by file name…">
+  <div style="display:flex;gap:8px">
+    <input type="text" id="remapInput" placeholder="Search the NAS by file name…">
+    <button class="btn" id="remapBrowse" hidden>Browse…</button>
+  </div>
+  <div class="warn" id="remapWarn" hidden></div>
   <div class="results" id="remapResults"></div>
   <div class="note" id="remapNote" hidden></div>
   <div class="dlgfoot">

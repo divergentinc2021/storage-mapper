@@ -401,6 +401,8 @@ function openRemap(mode, row) {
   $('remapResults').innerHTML = '';
   $('remapSave').disabled = true;
 
+  $('remapBrowse').hidden = mode !== 'dest';
+  $('remapWarn').hidden = true;
   if (mode === 'dest') {
     $('remapTitle').textContent = 'Set a destination';
     $('remapHint').innerHTML =
@@ -409,7 +411,7 @@ function openRemap(mode, row) {
       'material lands beside the curated content instead of merged into it.';
     $('remapInput').placeholder = 'e.g. Projects/Internal UWC Projects/Loggerhead Turtle Project/_fromDrive';
     $('remapInput').value = row.proposedNas || '';
-    $('remapSave').disabled = false;
+    validateDest();
   } else {
     $('remapTitle').textContent = 'Mark as already on the NAS';
     $('remapHint').innerHTML =
@@ -450,6 +452,32 @@ async function searchNas() {
         esc(baseOf(parentOf(REMAP.selected.abs.replace(/\\/g, '/')))) + '</b> as the same project.';
     });
   });
+}
+
+/**
+ * A destination must be absolute. A relative one silently created the tree next
+ * to wherever the copy plan ran instead of on the NAS, so the plan now skips it
+ * and the dialog refuses to save it.
+ */
+function isAbsoluteDest(p) {
+  var s = String(p || '');
+  return /^[A-Za-z]:[\\/]/.test(s) || s.indexOf('\\\\') === 0 || s.charAt(0) === '/';
+}
+
+function validateDest() {
+  if (!REMAP || REMAP.mode !== 'dest') return;
+  var v = $('remapInput').value.trim();
+  var ok = !!v && isAbsoluteDest(v);
+  $('remapSave').disabled = !ok;
+  if (!v) { $('remapWarn').hidden = true; return; }
+  $('remapWarn').hidden = ok;
+  if (!ok) {
+    $('remapWarn').innerHTML =
+      '<b>Needs a full path.</b> Use <code>Browse…</code>, or type something like ' +
+      '<code>Z:\\Projects\\Internal UWC Projects\\…\\_fromDrive</code>. ' +
+      'A relative path would be created next to the copy plan instead of on the NAS, ' +
+      'so it will be skipped.';
+  }
 }
 
 async function saveRemap() {
@@ -547,7 +575,11 @@ async function init() {
     });
   });
 
-  $('remapInput').addEventListener('input', searchNas);
+  $('remapInput').addEventListener('input', function () { searchNas(); validateDest(); });
+  $('remapBrowse').addEventListener('click', async function () {
+    var p = await window.mapper.pickFolder('Choose the destination folder on the NAS', false);
+    if (p && p.length) { $('remapInput').value = p[0]; validateDest(); }
+  });
   $('remapCancel').addEventListener('click', function () { $('remapDlg').close(); });
   $('remapSave').addEventListener('click', saveRemap);
 
