@@ -328,5 +328,44 @@ await (async () => {
   });
 })();
 
+// ── map plan ────────────────────────────────────────────────────────────────
+const mp = await import('../src/mapplan.mjs');
+console.log('\nmap plan\n');
+
+check('mirror assigns every new file a destination under the NAS root', () => {
+  const rows = [
+    { drivePath: 'Shoot_1/Pictures/a.jpg', name: 'a.jpg', size: 10, driveRoot: 'H:/d', proposedNas: '' },
+    { drivePath: 'Shoot_1/Videos/b.mp4', name: 'b.mp4', size: 20, driveRoot: 'H:/d', proposedNas: '' },
+  ];
+  const r = mp.assignDestinations(rows, { mode: 'mirror', nasRoot: 'Z:\\Amanzi', sep: '\\' });
+  assert.equal(r.changed, 2);
+  assert.equal(r.rows[0].proposedNas, 'Z:\\Amanzi\\Shoot_1\\Pictures\\a.jpg');
+  assert.ok(r.rows.every((x) => x.proposedNas.startsWith('Z:\\Amanzi')));
+});
+
+check('identical name AND size at the destination is skipped by default', () => {
+  const rows = [
+    { drivePath: 'a.jpg', name: 'a.jpg', size: 100, proposedNas: '/nas/a.jpg' },
+    { drivePath: 'b.jpg', name: 'b.jpg', size: 200, proposedNas: '/nas/b.jpg' },
+    { drivePath: 'c.jpg', name: 'c.jpg', size: 300, proposedNas: '/nas/c.jpg' },
+  ];
+  const existing = { '/nas/a.jpg': { size: 100 }, '/nas/b.jpg': { size: 999 } };
+  const out = mp.classifyAgainstDestination(rows, existing);
+  assert.equal(out[0].state, 'identical');
+  assert.equal(out[0].selected, false, 'an identical file must not be selected');
+  assert.equal(out[1].state, 'different');
+  assert.equal(out[1].selected, false, 'a size mismatch must not overwrite by default');
+  assert.equal(out[2].state, 'new');
+  assert.equal(out[2].selected, true);
+  const s = mp.summarise(out);
+  assert.deepEqual([s.new, s.identical, s.different, s.selected], [1, 1, 1, 1]);
+});
+
+check('destination matching is case- and separator-insensitive', () => {
+  const rows = [{ drivePath: 'a.jpg', name: 'a.jpg', size: 5, proposedNas: 'Z:\\Amanzi\\A.JPG' }];
+  const out = mp.classifyAgainstDestination(rows, { 'z:/amanzi/a.jpg': { size: 5 } });
+  assert.equal(out[0].state, 'identical', 'Windows paths differ in case and slash; must still match');
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

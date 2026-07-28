@@ -28,7 +28,8 @@
   <select id="profileSel" title="Saved profiles"><option value="">(unsaved)</option></select>
   <button class="btn" id="btnProfSave" title="Save changes to this profile">Save</button>
   <button class="btn" id="btnProfMenu" title="Profile actions">⋯</button>
-  <button class="btn primary" id="btnCopyTop" disabled title="Run a comparison first">Copy to NAS…</button>
+  <button class="btn" id="btnMapTop" disabled title="Run a comparison first">Map…</button>
+  <button class="btn primary" id="btnCopyTop" disabled title="Map a destination first">Copy…</button>
   <button class="btn" id="btnExport" disabled>Export reports…</button>
   <button class="btn" id="btnWhatsNew" title="What's new">?</button>
   <button class="btn" id="btnTheme" title="Toggle theme">◐</button>
@@ -104,6 +105,18 @@
       <input type="checkbox" id="splashHide"> Don't show this again for this version
     </label>
     <button class="btn primary" id="splashGo">Get started</button>
+  </div>
+</dialog>
+
+<dialog id="mapDlg">
+  <h2>Where should the new files go?</h2>
+  <p class="hint" id="mapHint"></p>
+  <div class="note" id="mapNote"></div>
+  <div class="results" id="mapPreview"></div>
+  <div class="dlgfoot">
+    <button class="btn" id="mapCancel">Cancel</button>
+    <button class="btn" id="mapNew">Choose a different folder…</button>
+    <button class="btn primary" id="mapConfirm">Confirm</button>
   </div>
 </dialog>
 

@@ -19,6 +19,9 @@ var MAX_ROWS = 1000;           // render cap; the CSV export always has everythi
 var PROFILE = null;            // the full profile: shared knowledge + local paths
 var PROFILE_FILE = null;
 var PENDING_SHARED = null;
+var MAPPED = null;             // rows with destinations assigned, after the Map step
+var COPY_ROWS = [];            // mapped rows classified against the destination
+var SEP = '/';                 // platform separator, learned from appInfo
 
 var $ = function (id) { return document.getElementById(id); };
 
@@ -255,6 +258,7 @@ async function openProfileMenu() {
       '<button class="btn" id="pmExport">Export (rules only)…</button>' +
       '<button class="btn" id="pmExportAll">Export with paths…</button>' +
       '<button class="btn" id="pmImport">Import…</button>' +
+      '<button class="btn" id="pmHistory">Copy history…</button>' +
     '</div>';
 
   $('profBody').querySelectorAll('button[data-act]').forEach(function (b) {
@@ -289,6 +293,24 @@ async function openProfileMenu() {
     if (r && r.ok) { $('profDlg').close(); if (r.shared && r.shared.status === 'updated') showSharedDialog(r.shared); }
   });
   on('pmUnshare', async function () { await window.mapper.profilesSetShared(null); openProfileMenu(); });
+  on('pmHistory', async function () {
+    var runs = await window.mapper.journalRead(50);
+    $('profTitle').textContent = 'Copy history';
+    $('profHint').innerHTML =
+      'Every run is recorded — what was copied, by whom, and what the engine said. ' +
+      'For rolling a whole volume back, use a <b>QNAP snapshot</b>; this list is what ' +
+      'makes reversing one specific run precise.';
+    $('profBody').innerHTML = runs.length ? runs.map(function (r) {
+      var when = new Date(r.at).toLocaleString();
+      return '<div class="profrow"><span class="nm">' +
+        (r.dryRun ? '<span class="statetag identical">dry run</span> ' : '') +
+        '<b>' + (r.ok ? '✓' : '✗') + ' ' + esc(when) + '</b> — ' +
+        (r.files || []).length + ' file(s), ' + fmtBytes(r.bytes || 0) +
+        '<small>' + esc(r.by || '') + ' · ' + esc(r.engine || '') +
+        (r.failed ? ' · ' + r.failed + ' folder(s) failed' : '') + '</small></span></div>';
+    }).join('') : '<div class="empty">No copies have been run yet.</div>';
+    $('profDlg').showModal();
+  });
 
   $('profDlg').showModal();
 }
@@ -366,8 +388,9 @@ async function runCompare() {
   setAccuracy(res.accuracy, res.manifestStats);
   DROPPED = res.droppedRoots || [];
   $('btnExport').disabled = false;
+  MAPPED = null;
   renderCounts();
-  syncCopyButton();
+  syncStageButtons();
   renderTab();
 }
 
@@ -376,18 +399,7 @@ async function runCompare() {
  * originally only on the New tab, which made it look like the feature did not
  * exist unless you happened to be standing on the right tab.
  */
-function syncCopyButton() {
-  var btn = $('btnCopyTop');
-  if (!btn) return;
-  var ready = copyReadyRows();
-  var unmapped = RESULT ? RESULT.new.length - ready.length : 0;
-  btn.disabled = !ready.length;
-  btn.textContent = ready.length ? 'Copy ' + ready.length.toLocaleString() + ' to NAS…' : 'Copy to NAS…';
-  btn.title = !RESULT ? 'Run a comparison first'
-    : ready.length ? ready.length + ' new file(s) have an absolute destination'
-    : (unmapped ? 'All ' + unmapped + ' new file(s) still need a destination — use Set destination… on the New tab'
-                : 'Nothing new to copy: everything is already on the NAS');
-}
+function syncCopyButton() { syncStageButtons(); }
 
 function renderCounts() {
   if (!RESULT) return;
@@ -609,7 +621,7 @@ async function saveRemap() {
     }
   }
   await window.mapper.saveMapping(MAPPING);
-  syncCopyButton();
+  syncStageButtons();
   $('remapDlg').close();
   // The rule only takes effect on a re-run, so say so rather than implying the
   // table on screen already reflects it.
@@ -617,41 +629,181 @@ async function saveRemap() {
     '<div class="note"><b>Rule saved.</b> Hit Compare again to apply it.</div>');
 }
 
+// ── map ─────────────────────────────────────────────────────────────────────
+/*
+  One decision for every new file, instead of per-row. Compare lights Map; Map
+  lights Copy. The staging is the point: you cannot copy something you have not
+  said where to put.
+*/
+function joinDest(root, rel) {
+  var r = String(root).replace(/[\\/]+$/, '');
+  var t = String(rel).split(/[\\/]+/).filter(Boolean).join(SEP);
+  return t ? r + SEP + t : r;
+}
+
+function syncStageButtons() {
+  var mapBtn = $('btnMapTop'), copyBtn = $('btnCopyTop');
+  var newCount = RESULT ? RESULT.new.length : 0;
+  mapBtn.disabled = !newCount;
+  mapBtn.textContent = newCount ? 'Map ' + newCount.toLocaleString() + ' new…' : 'Map…';
+  mapBtn.title = !RESULT ? 'Run a comparison first'
+    : newCount ? 'Choose where the new files should go'
+    : 'Nothing new — everything is already on the NAS';
+
+  var ready = MAPPED ? MAPPED.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); }) : [];
+  copyBtn.disabled = !ready.length;
+  copyBtn.textContent = ready.length ? 'Copy ' + ready.length.toLocaleString() + '…' : 'Copy…';
+  copyBtn.title = ready.length ? 'Review and copy' : 'Map a destination first';
+}
+
+function openMap() {
+  if (!RESULT || !RESULT.new.length) return;
+  MAP_TARGET = NAS_ROOTS.length === 1 ? NAS_ROOTS[0] : null;
+  renderMap();
+  $('mapDlg').showModal();
+}
+
+var MAP_TARGET = null;
+
+function renderMap() {
+  var n = RESULT.new.length;
+  if (!MAP_TARGET && NAS_ROOTS.length > 1) {
+    $('mapHint').innerHTML = '<b>' + n.toLocaleString() + '</b> new file(s). ' +
+      'You compared against more than one NAS folder — pick which one they belong under.';
+    $('mapNote').innerHTML = '';
+    $('mapPreview').innerHTML = NAS_ROOTS.map(function (r, i) {
+      return '<div class="row" data-nas="' + i + '">' + esc(r) + '</div>';
+    }).join('');
+    $('mapPreview').querySelectorAll('[data-nas]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        MAP_TARGET = NAS_ROOTS[Number(el.dataset.nas)];
+        renderMap();
+      });
+    });
+    $('mapConfirm').disabled = true;
+    return;
+  }
+  $('mapConfirm').disabled = !MAP_TARGET;
+  $('mapHint').innerHTML = '<b>' + n.toLocaleString() + '</b> new file(s) will go under ' +
+    '<b>' + esc(MAP_TARGET || '(nothing chosen)') + '</b>, keeping the folder structure they have in Drive.';
+  // Say the awkward part out loud rather than let it surprise anyone.
+  $('mapNote').innerHTML =
+    'They are <b>not</b> merged into existing sub-folders — the two trees do not line up ' +
+    '(Drive <code>Shoot_…/Pictures</code> vs NAS <code>360 Footage/Shoot_…_SRC/Pictures/Processed</code>), ' +
+    'and guessing would be worse than predictable. <b>Nothing existing is touched</b>; you can file ' +
+    'them afterwards.';
+  var ex = RESULT.new.slice(0, 6);
+  $('mapPreview').innerHTML = ex.map(function (r) {
+    return '<div class="row">' + esc(r.drivePath) +
+      '<small>→ ' + esc(joinDest(MAP_TARGET, r.drivePath)) + '</small></div>';
+  }).join('') + (n > ex.length ? '<div class="row"><small>… and ' + (n - ex.length) + ' more</small></div>' : '');
+}
+
+function applyMap() {
+  if (!MAP_TARGET) return;
+  MAPPED = RESULT.new.map(function (r) {
+    return Object.assign({}, r, {
+      proposedNas: joinDest(MAP_TARGET, r.drivePath),
+      mappedBy: 'mapped to ' + MAP_TARGET,
+    });
+  });
+  $('mapDlg').close();
+  syncStageButtons();
+  RESULT.new = MAPPED;      // so the New tab and the exported plan agree
+  renderTab();
+  $('main').insertAdjacentHTML('afterbegin',
+    '<div class="note"><b>Mapped ' + MAPPED.length.toLocaleString() + ' file(s)</b> to ' +
+    esc(MAP_TARGET) + '. <b>Copy…</b> is now available.</div>');
+}
+
 // ── copy ────────────────────────────────────────────────────────────────────
 var COPY_RUNNING = false;
 
 function copyReadyRows() {
-  if (!RESULT) return [];
-  return RESULT.new.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); });
+  var src = MAPPED || (RESULT ? RESULT.new : []);
+  return src.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); });
+}
+
+/** Skip anything already there at the same size; never overwrite by default. */
+function classifyAgainstDest(rows, existing) {
+  var get = function (p) { return existing[String(p).toLowerCase().split('\\').join('/')]; };
+  return rows.map(function (r) {
+    var hit = get(r.proposedNas);
+    if (!hit) return Object.assign({}, r, { state: 'new', existingSize: null, selected: true });
+    if (Number(hit.size) === Number(r.size)) {
+      return Object.assign({}, r, { state: 'identical', existingSize: hit.size, selected: false });
+    }
+    return Object.assign({}, r, { state: 'different', existingSize: hit.size, selected: false });
+  });
+}
+
+function renderCopyReview() {
+  var counts = { new: 0, identical: 0, different: 0 };
+  COPY_ROWS.forEach(function (r) { counts[r.state]++; });
+  var sel = COPY_ROWS.filter(function (r) { return r.selected; });
+  var bytes = sel.reduce(function (a, r) { return a + r.size; }, 0);
+
+  $('copyHint').innerHTML =
+    '<b>' + counts.new + '</b> not on the NAS · ' +
+    '<b>' + counts.identical + '</b> already there at the same size · ' +
+    '<b>' + counts.different + '</b> there but a different size.';
+
+  $('copyLog').innerHTML =
+    '<div class="selbar" style="padding:6px 10px">' +
+      '<span class="grow">Selected: <b>' + sel.length + '</b> file(s), ' + fmtBytes(bytes) + '</span>' +
+      '<button class="btn sm" id="selNew">Select only new</button>' +
+      '<button class="btn sm" id="selAll">Select all</button>' +
+      '<button class="btn sm" id="selNone">Select none</button>' +
+    '</div>' +
+    COPY_ROWS.slice(0, 600).map(function (r, i) {
+      return '<div class="filerow">' +
+        '<input type="checkbox" data-i="' + i + '"' + (r.selected ? ' checked' : '') +
+        (r.state === 'identical' ? ' title="already on the NAS at the same size"' : '') + '>' +
+        '<span class="statetag ' + r.state + '">' + r.state + '</span>' +
+        '<span class="nm">' + esc(r.name) + '<small>→ ' + esc(r.proposedNas) + '</small></span>' +
+        '<span class="sz">' + fmtBytes(r.size) +
+          (r.existingSize !== null && r.existingSize !== undefined
+            ? ' <span style="color:var(--muted)">(there: ' + fmtBytes(r.existingSize) + ')</span>' : '') +
+        '</span></div>';
+    }).join('') +
+    (COPY_ROWS.length > 600 ? '<div class="filerow"><small>… and ' + (COPY_ROWS.length - 600) +
+      ' more (all included in the copy)</small></div>' : '');
+  $('copyLog').hidden = false;
+
+  $('copyLog').querySelectorAll('input[type=checkbox][data-i]').forEach(function (cb) {
+    cb.addEventListener('change', function () {
+      COPY_ROWS[Number(cb.dataset.i)].selected = cb.checked;
+      renderCopyReview();
+    });
+  });
+  var setAll = function (fn) { COPY_ROWS.forEach(fn); renderCopyReview(); };
+  $('selNew').addEventListener('click', function () { setAll(function (r) { r.selected = r.state === 'new'; }); });
+  $('selAll').addEventListener('click', function () { setAll(function (r) { r.selected = true; }); });
+  $('selNone').addEventListener('click', function () { setAll(function (r) { r.selected = false; }); });
+  $('copyGo').disabled = !sel.length;
 }
 
 async function openCopy() {
   var rows = copyReadyRows();
-  var bytes = rows.reduce(function (a, r) { return a + r.size; }, 0);
-  var eng = await window.mapper.copyEngine();
-  var dests = {};
-  rows.forEach(function (r) { dests[r.proposedNas.replace(/[\\/][^\\/]*$/, '')] = 1; });
-  var dl = Object.keys(dests);
-
-  $('copyHint').innerHTML =
-    '<b>' + rows.length.toLocaleString() + ' file(s), ' + fmtBytes(bytes) + '</b> into ' +
-    dl.length + ' folder(s) using <code>' + esc(eng.engine) + '</code>.' +
-    (eng.isWindows ? '' : ' <i>(robocopy is Windows-only; this machine will use rsync.)</i>');
-  $('copyLog').innerHTML = dl.slice(0, 40).map(function (d) {
-    return '<div class="row">→ ' + esc(d) + '</div>';
-  }).join('') + (dl.length > 40 ? '<div class="row">… and ' + (dl.length - 40) + ' more</div>' : '');
-  $('copyLog').hidden = false;
+  if (!rows.length) return;
+  $('copyTitle').textContent = 'Review before copying';
+  $('copyHint').textContent = 'Checking what is already at the destination…';
   $('copyResult').hidden = true;
   $('copyBar').hidden = true;
   $('copyCancel').hidden = true;
   $('copyDry').disabled = false;
-  $('copyGo').disabled = false;
   $('copyDlg').showModal();
+
+  // Ask the filesystem, not the earlier index: the destination may be a folder
+  // that was never part of the comparison.
+  var existing = await window.mapper.inspectDest(rows.map(function (r) { return r.proposedNas; }));
+  COPY_ROWS = classifyAgainstDest(rows, existing || {});
+  renderCopyReview();
 }
 
 async function startCopy(dryRun) {
   if (COPY_RUNNING) return;
-  var rows = copyReadyRows();
+  var rows = COPY_ROWS.filter(function (r) { return r.selected; });
   if (!rows.length) return;
   COPY_RUNNING = true;
   $('copyDry').disabled = true;
@@ -707,6 +859,7 @@ async function init() {
   try {
     var info = await window.mapper.appInfo();
     APP_VERSION = info.version;
+    SEP = info.isWindows ? '\\' : '/';
     $('appVer').textContent = 'v' + info.version;
     $('appVer').title = 'Electron ' + info.electron + ' · copy engine: ' + info.engine;
     var st = await window.mapper.profilesSettings();
@@ -791,11 +944,18 @@ async function init() {
   });
 
   $('btnCopyTop').addEventListener('click', openCopy);
+  $('btnMapTop').addEventListener('click', openMap);
+  $('mapCancel').addEventListener('click', function () { $('mapDlg').close(); });
+  $('mapConfirm').addEventListener('click', applyMap);
+  $('mapNew').addEventListener('click', async function () {
+    var p = await window.mapper.pickFolder('Choose where the new files should go', false);
+    if (p && p.length) { MAP_TARGET = p[0]; renderMap(); }
+  });
   $('copyClose').addEventListener('click', function () { $('copyDlg').close(); });
   $('copyCancel').addEventListener('click', function () { window.mapper.copyCancel(); });
   $('copyDry').addEventListener('click', function () { startCopy(true); });
   $('copyGo').addEventListener('click', function () {
-    var rows = copyReadyRows();
+    var rows = COPY_ROWS.filter(function (x) { return x.selected; });
     var bytes = rows.reduce(function (a, r) { return a + r.size; }, 0);
     if (!window.confirm('Copy ' + rows.length + ' file(s), ' + fmtBytes(bytes) +
         ', to the NAS?\n\nFiles are only added. Nothing on the NAS is deleted or ' +

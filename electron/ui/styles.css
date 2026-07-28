@@ -186,3 +186,17 @@ dialog.splash { width: 780px; }
 .safetybar { font-size: 12px; padding: 9px 11px; border-radius: 8px; margin: 4px 0 12px;
   background: var(--plane); border: 1px solid var(--good); color: var(--text-secondary); }
 .safetybar b { color: var(--text-primary); }
+
+.statetag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 99px;
+  border: 1px solid currentColor; white-space: nowrap; }
+.statetag.new { color: var(--good); }
+.statetag.identical { color: var(--muted); }
+.statetag.different { color: var(--critical); }
+.filerow { display: flex; align-items: center; gap: 9px; padding: 6px 10px;
+  border-bottom: 1px solid var(--grid); font-size: 12px; }
+.filerow:last-child { border-bottom: 0; }
+.filerow .nm { flex: 1; min-width: 0; word-break: break-all; }
+.filerow .nm small { display: block; color: var(--muted); }
+.filerow .sz { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.selbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; font-size: 12px; }
+.selbar .grow { flex: 1; }

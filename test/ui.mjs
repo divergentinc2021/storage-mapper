@@ -57,7 +57,8 @@ const win = {
 
 const sandbox = { document: doc, window: win, console, setTimeout, Set, JSON, Math, Date };
 const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(){return RESULT}, set RESULT(v){RESULT=v},
-  syncCopyButton, copyReadyRows, isAbsoluteDest };`);
+  syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest,
+  get MAPPED(){return MAPPED}, set MAPPED(v){MAPPED=v} };`);
 const api = fn(...Object.values(sandbox));
 
 let failures = 0;
@@ -66,41 +67,73 @@ const check = (name, f) => {
   catch (e) { failures++; console.log(`  FAIL ${name}\n       ${e.message}`); }
 };
 
-console.log('\nrenderer copy-button logic\n');
+console.log('\nrenderer: staged Compare -> Map -> Copy\n');
 
-const btn = doc.getElementById('btnCopyTop');
+const copyBtn = doc.getElementById('btnCopyTop');
+const mapBtn = doc.getElementById('btnMapTop');
 
-check('disabled before any comparison, and says why', () => {
-  api.RESULT = null;
-  api.syncCopyButton();
-  assert.equal(btn.disabled, true);
-  assert.match(btn.title, /Run a comparison first/);
+/*
+  The staged flow is the contract: Compare lights Map, Map lights Copy. You must
+  not be able to copy something you have not said where to put.
+*/
+check('before any comparison both Map and Copy are disabled', () => {
+  api.RESULT = null; api.MAPPED = null;
+  api.syncStageButtons();
+  assert.equal(mapBtn.disabled, true);
+  assert.equal(copyBtn.disabled, true);
+  assert.match(mapBtn.title, /Run a comparison first/);
 });
 
-check('ENABLED when new rows have absolute destinations', () => {
+check('after a comparison Map lights up but Copy stays LOCKED', () => {
+  // The destinations here are deliberately ALREADY ABSOLUTE. An earlier version
+  // of this test used empty ones, so Copy was disabled for the wrong reason and
+  // the test passed even when the Map gate was removed entirely. The gate is
+  // "MAPPED is null", not "there is nothing copyable".
   api.RESULT = { new: [
-    { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/Projects/a/x.mp4' },
-    { drivePath: 'a/y.mp4', name: 'y.mp4', size: 20, driveRoot: 'H:/d', proposedNas: 'Z:/Projects/a/y.mp4' },
+    { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/Amanzi/a/x.mp4' },
+    { drivePath: 'a/y.mp4', name: 'y.mp4', size: 20, driveRoot: 'H:/d', proposedNas: 'Z:/Amanzi/a/y.mp4' },
   ] };
-  api.syncCopyButton();
-  assert.equal(btn.disabled, false, 'button stayed disabled with copyable rows');
-  assert.match(btn.textContent, /Copy 2 to NAS/);
+  api.MAPPED = null;
+  api.syncStageButtons();
+  assert.equal(mapBtn.disabled, false, 'Map should be available once there are new files');
+  assert.match(mapBtn.textContent, /Map 2 new/);
+  assert.equal(copyBtn.disabled, true, 'Copy must stay locked until a destination is mapped');
+  assert.match(copyBtn.title, /Map a destination first/);
 });
 
-check('disabled but explains itself when destinations are relative', () => {
-  api.RESULT = { new: [
-    { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Projects/a/x.mp4' },
-  ] };
-  api.syncCopyButton();
-  assert.equal(btn.disabled, true, 'a relative destination must not be copyable');
-  assert.match(btn.title, /Set destination/);
+check('once mapped, Copy lights up with the count', () => {
+  api.MAPPED = [
+    { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/Amanzi/a/x.mp4' },
+    { drivePath: 'a/y.mp4', name: 'y.mp4', size: 20, driveRoot: 'H:/d', proposedNas: 'Z:/Amanzi/a/y.mp4' },
+  ];
+  api.syncStageButtons();
+  assert.equal(copyBtn.disabled, false, 'Copy should unlock after mapping');
+  assert.match(copyBtn.textContent, /Copy 2/);
 });
 
-check('disabled with the right reason when nothing is new', () => {
-  api.RESULT = { new: [] };
-  api.syncCopyButton();
-  assert.equal(btn.disabled, true);
-  assert.match(btn.title, /already on the NAS/);
+check('a relative mapped destination does NOT unlock Copy', () => {
+  api.MAPPED = [{ drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Amanzi/a/x.mp4' }];
+  api.syncStageButtons();
+  assert.equal(copyBtn.disabled, true, 'a relative destination must never be copyable');
+});
+
+check('nothing new means Map is disabled and says why', () => {
+  api.RESULT = { new: [] }; api.MAPPED = null;
+  api.syncStageButtons();
+  assert.equal(mapBtn.disabled, true);
+  assert.match(mapBtn.title, /already on the NAS/);
+});
+
+check('classifying against the destination skips identical files', () => {
+  const rows = [
+    { drivePath: 'a.jpg', name: 'a.jpg', size: 100, proposedNas: 'Z:/n/a.jpg' },
+    { drivePath: 'b.jpg', name: 'b.jpg', size: 200, proposedNas: 'Z:/n/b.jpg' },
+    { drivePath: 'c.jpg', name: 'c.jpg', size: 300, proposedNas: 'Z:/n/c.jpg' },
+  ];
+  const out = api.classifyAgainstDest(rows, { 'z:/n/a.jpg': { size: 100 }, 'z:/n/b.jpg': { size: 9 } });
+  assert.deepEqual(out.map((r) => r.state), ['identical', 'different', 'new']);
+  assert.deepEqual(out.map((r) => r.selected), [false, false, true],
+    'only genuinely new files are selected by default');
 });
 
 check('UNC destinations count as absolute', () => {

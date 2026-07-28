@@ -11,6 +11,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const profiles = require('./profiles.cjs');
 const copier = require('./copy.cjs');
+const journal = require('./journal.cjs');
 
 const ROOT = path.join(__dirname, '..');
 let win = null;
@@ -205,11 +206,21 @@ ipcMain.handle('copy-run', async (_e, opts) => {
   if (copier.isBusy()) return { ok: false, error: 'a copy is already running' };
   const send = (evt) => { if (win) win.webContents.send('copy-event', evt); };
   try {
-    return await copier.run(opts, send);
+    const r = await copier.run(opts, send);
+    // Record every run, including failures and dry runs -- a journal that only
+    // logs successes is no use when you are trying to work out what happened.
+    journal.append(app, r, opts.rows || []);
+    return r;
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
+
+ipcMain.handle('journal-read', async (_e, limit) => journal.read(app, limit || 50));
+ipcMain.handle('journal-reversal', async (_e, entry) => ({
+  files: journal.reversalList(entry),
+  note: 'These are the files that run added. Nothing is deleted here — this is a list for you to act on.',
+}));
 
 ipcMain.handle('copy-cancel', async () => { copier.cancel(); return true; });
 ipcMain.handle('copy-engine', async () => ({ engine: copier.engine(), isWindows: copier.IS_WIN }));
@@ -220,3 +231,19 @@ ipcMain.handle('app-info', async () => ({
   isWindows: copier.IS_WIN,
   electron: process.versions.electron,
 }));
+
+/**
+ * What is already sitting at each destination. Needed because a destination the
+ * user just picked may be outside the NAS roots that were scanned, so the
+ * comparison index cannot answer for it.
+ */
+ipcMain.handle('inspect-dest', async (_e, paths) => {
+  const out = {};
+  for (const p of paths || []) {
+    try {
+      const st = fs.statSync(p);
+      out[String(p).toLowerCase().split('\\').join('/')] = { size: st.size, mtimeMs: st.mtimeMs };
+    } catch { /* not there: that is the answer */ }
+  }
+  return out;
+});

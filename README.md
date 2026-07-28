@@ -274,3 +274,48 @@ harder to attribute.
 After a successful copy, run **Compare** again: everything you copied should move
 into *Already on NAS*. That round trip is the proof it landed — not the absence
 of errors in the log.
+
+## The staged flow: Compare → Map → Copy
+
+Each stage unlocks the next, so you cannot copy something you have not said where
+to put.
+
+**Compare** finds what is new. **Map** then assigns a destination to *all* of them
+in one decision — per-row mapping was fine for three files and useless at 126:
+
+- **Confirm** — put them under the NAS folder you compared against
+- **Choose a different folder…** — pick any other destination
+
+Either way each file keeps the folder structure it has in Drive. It is **not**
+merged into existing sub-folders: in the real data the trees do not line up
+(Drive `Shoot_…/Pictures` vs NAS `360 Footage/Shoot_…_SRC/Pictures/Processed`),
+and guessing which existing folder a file belongs in is exactly the silent
+decision that creates a mess. Nothing existing is touched; file them afterwards.
+
+**Copy** then shows every file against what is already at its destination:
+
+| state | meaning | selected by default |
+|---|---|---|
+| **new** | nothing there | **yes** |
+| **identical** | same name *and* same byte count | no — skipped |
+| **different** | same name, different size | no — overwriting is the one irreversible move |
+
+*Select only new* / *all* / *none*, then **Dry run** or **Copy**.
+
+## Tracking back
+
+**Not git.** These are multi-gigabyte video files; git (or LFS, or annex) would
+cost more storage and operational pain than the problem is worth.
+
+Two mechanisms instead, at different levels:
+
+- **Volume rollback → QNAP snapshots.** Block-level, instant, space-efficient, and
+  already provisioned on this NAS (1.1 TB reserved, currently unused). Take one
+  before a large copy and the whole volume can be rolled back.
+- **Per-run detail → the copy journal.** Every run — including dry runs and
+  failures — is appended to `runs.jsonl`: what was copied, by whom, from which
+  machine, and what the engine said per folder. **⋯ → Copy history…**
+
+Snapshots answer *"put the volume back"*. The journal answers *"which files did
+that particular run add"* — and because the copy is additive-only, that list
+**is** the reversal.
