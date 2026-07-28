@@ -5,7 +5,7 @@
  * It imports the same src/ modules the CLI uses — there is no second copy of the
  * matching logic to drift out of sync with the tested one.
  */
-import { walk, looksLikeDriveMount } from '../src/walk.mjs';
+import { walk, looksLikeDriveMount, dedupeRoots } from '../src/walk.mjs';
 import { loadManifest, emptyManifest } from '../src/manifest.mjs';
 import { loadMapping } from '../src/mapping.mjs';
 import { match, nasInternalOverlap } from '../src/match.mjs';
@@ -18,7 +18,14 @@ const send = (m) => process.send && process.send(m);
 process.on('message', async (msg) => {
   if (msg.cmd !== 'compare') return;
   try {
-    const { driveRoots, nasRoots, manifestPath, mapping: mappingObj } = msg;
+    const raw = msg;
+    // Picking a parent and its children walks the children twice and
+    // inflates every count, so collapse nested roots before walking.
+    const dd = dedupeRoots(raw.driveRoots || []);
+    const dn = dedupeRoots(raw.nasRoots || []);
+    const driveRoots = dd.roots, nasRoots = dn.roots;
+    const droppedRoots = [...dd.dropped, ...dn.dropped];
+    const manifestPath = raw.manifestPath, mappingObj = raw.mapping;
 
     for (const r of nasRoots) {
       if (looksLikeDriveMount(r)) {
@@ -78,6 +85,7 @@ process.on('message', async (msg) => {
       },
       overlap,
       nasIndex,
+      droppedRoots,
       accuracy: manifest.withMd5 > 0 ? 'exact' : (manifest.count > 0 ? 'no-md5' : 'approximate'),
       manifestStats: { count: manifest.count, withMd5: manifest.withMd5 },
     });

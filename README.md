@@ -163,3 +163,38 @@ Builds a browser-runnable copy from the **real** `electron/ui/*` with a mocked
 bridge, so the interface can be exercised without packaging, a NAS or a Drive
 mount. Same technique as the sibling Drive tool, where it caught two bugs no
 server-side check could have.
+
+### Profiles
+
+The profile dropdown in the header remembers a whole setup: your folders **and**
+the rules you have taught it. **Save** updates the current one; **⋯** opens
+save-as, set-default, delete, import/export and the shared profile.
+
+A profile deliberately has two halves:
+
+| half | what | portable? |
+|---|---|---|
+| **shared** | aliases and mapping rules | **yes** — the accumulated knowledge |
+| **local** | Drive roots, NAS roots, manifest path | **no** — `H:\` is not `H:\` on another PC |
+
+Set one profile as **default (★)** and it loads at startup.
+
+### Shared profiles
+
+Point the app at a profile on the NAS (⋯ → *Choose one…*). Whenever someone
+updates it, the next launch shows what changed and offers three answers:
+
+- **Load changes** — merge the new rules into yours
+- **Keep mine** — ignore this update (it will not ask again for the same one)
+- **Start fresh** — replace your rules with the shared set
+
+**Only the shared half is ever applied.** Your Drive and NAS folder choices are
+never overwritten by someone else's drive letters — that would just break the
+app on your machine. *Export (rules only…)* is the safe thing to put on the NAS;
+*Export with paths…* exists for cloning a setup onto an identical machine.
+
+### Nested folders are collapsed
+
+Choosing `H:\Shared drives` **and** the individual shared drives under it would
+walk each of those twice and double every count. Nested roots are collapsed
+before walking and the skipped ones are listed above the results.

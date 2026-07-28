@@ -58,6 +58,24 @@ var MK_OVERLAP = [
 ];
 
 var MK_MAPPING = { nasRoots: [], driveRoots: [], aliases: [], map: [] };
+
+var MK_PROFILES = [{
+  file: '/mock/UIZ.json', name: 'UIZ Windows', updatedAt: '2026-07-28T20:00:00Z',
+  updatedBy: 'laure@UIZ-PC', isDefault: true,
+  counts: { aliases: 4, map: 6, driveRoots: 11, nasRoots: 4 },
+  full: {
+    schema: 1, name: 'UIZ Windows',
+    shared: { aliases: [['UIH Dental','u0004_Custom_Haptic_VR_Dentistry']], map: [] },
+    local: { driveRoots: ['H:/My Drive','H:/Shared drives'], nasRoots: ['Z:/Projects'], manifestPath: null }
+  }
+}];
+
+var MK_SHARED = {
+  status: 'updated', path: 'Z:/UIZ/storage-mapper/team.smprofile.json', hash: 'abc123',
+  name: 'UIZ Team', updatedAt: '2026-07-28T19:30:00Z', updatedBy: 'bianca@UIZ-PC2',
+  incoming: { aliases: [['UIH Dental','u0004_Custom_Haptic_VR_Dentistry'],['IZ_YouTube_Project','YouTube']], map: [{ drive:'Shared drives/UIZ - PROJECTS', nas:'Projects/Internal UIZ Projects/_fromDrive' }] },
+  added: { aliases: [['IZ_YouTube_Project','YouTube']], map: [{ drive:'Shared drives/UIZ - PROJECTS', nas:'Projects/Internal UIZ Projects/_fromDrive' }] }
+};
 var MK_MANIFEST = null;
 
 window.mapper = {
@@ -78,6 +96,7 @@ window.mapper = {
     return new Promise(function (res) {
       setTimeout(function () {
         res({ type:'done', result: MK_RESULT, overlap: MK_OVERLAP, nasIndex: MK_NAS,
+              droppedRoots: [{ root:'H:/Shared drives/UIZ - PROJECTS', insideOf:'H:/Shared drives' }],
               accuracy: MK_MANIFEST ? 'exact' : 'approximate',
               manifestStats: { count: 5513, withMd5: MK_MANIFEST ? 5355 : 0 } });
       }, 520);
@@ -94,6 +113,17 @@ window.mapper = {
   mappingPath: function () { return Promise.resolve('/mock/mapping.json'); },
   exportReports: function () { return Promise.resolve({ ok:true, outDir:'/mock/out', summary:{} }); },
   revealInFolder: function () { return Promise.resolve(); },
+  profilesBoot: function () { return Promise.resolve({ profile: null, defaultFile: null, shared: MK_SHARED }); },
+  profilesList: function () { return Promise.resolve(MK_PROFILES); },
+  profilesSave: function (p) { window.__savedProfile = p; return Promise.resolve({ file: '/mock/p.json', profile: p }); },
+  profilesLoad: function () { return Promise.resolve(MK_PROFILES[0].full); },
+  profilesDelete: function () { return Promise.resolve(true); },
+  profilesSetDefault: function () { return Promise.resolve(true); },
+  profilesExport: function (p, incl) { window.__exported = { p: p, includeLocal: incl }; return Promise.resolve({ ok:true, file:'/mock/x.json' }); },
+  profilesImport: function () { return Promise.resolve({ ok:true, file:'/mock/i.json', profile: MK_PROFILES[0].full }); },
+  profilesSetShared: function () { return Promise.resolve({ ok:true, path:'Z:/UIZ/storage-mapper/team.smprofile.json', shared: MK_SHARED }); },
+  profilesSharedApplied: function (h, sh) { window.__sharedApplied = { hash:h, shared:sh }; return Promise.resolve(true); },
+  profilesSettings: function () { return Promise.resolve({ sharedProfilePath: 'Z:/UIZ/storage-mapper/team.smprofile.json' }); },
   onProgress: function (cb) { window.__prog = window.__prog || []; window.__prog.push(cb); return function(){}; }
 };
 </script>`;

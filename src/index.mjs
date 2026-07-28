@@ -12,7 +12,7 @@
  */
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { walk, looksLikeDriveMount } from './walk.mjs';
+import { walk, looksLikeDriveMount, dedupeRoots } from './walk.mjs';
 import { loadManifest, emptyManifest } from './manifest.mjs';
 import { loadMapping } from './mapping.mjs';
 import { match, nasInternalOverlap } from './match.mjs';
@@ -61,8 +61,12 @@ async function main() {
   }
 
   const mapping = loadMapping(args.config);
-  const nasRoots = [...mapping.nasRoots, ...args.nas];
-  const driveRoots = [...mapping.driveRoots, ...args.drive];
+  const ddN = dedupeRoots([...mapping.nasRoots, ...args.nas]);
+  const ddD = dedupeRoots([...mapping.driveRoots, ...args.drive]);
+  const nasRoots = ddN.roots, driveRoots = ddD.roots;
+  [...ddN.dropped, ...ddD.dropped].forEach(function (d) {
+    console.warn(`NOTE: skipping "${d.root}" — already covered by "${d.insideOf}"`);
+  });
 
   if (!nasRoots.length || !driveRoots.length) {
     console.error('Need at least one --nas root and one --drive root.');

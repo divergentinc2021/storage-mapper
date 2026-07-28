@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { dedupeRoots } from '../src/walk.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -166,6 +167,29 @@ check('a copy plan was produced and copies only new files', () => {
   assert.ok(!bat.includes('scan_001.mp4'), 'plan would re-copy a duplicate');
   assert.ok(!bat.includes('Budget.gsheet'), 'plan would copy a native stub');
   assert.ok(!/\/MIR\b/.test(bat), 'plan must never mirror (would delete on the NAS)');
+});
+
+check('nested roots collapse, so a folder inside another is not walked twice', () => {
+  // The real-world case: picking "H:\\Shared drives" AND each shared drive under it.
+  const r = dedupeRoots([
+    'H:/Shared drives',
+    'H:/Shared drives/UIZ - PROJECTS',
+    'H:/Shared drives/UIH - JIGSPACE',
+    'H:/My Drive',
+  ]);
+  assert.deepEqual(r.roots.sort(), ['H:/My Drive', 'H:/Shared drives']);
+  assert.equal(r.dropped.length, 2, 'both nested roots should be reported as dropped');
+  assert.ok(r.dropped.every((d) => d.insideOf === 'H:/Shared drives'));
+});
+
+check('an exact duplicate root is collapsed too', () => {
+  const r = dedupeRoots(['Z:/Projects', 'Z:/Projects']);
+  assert.equal(r.roots.length, 1);
+});
+
+check('sibling roots are both kept', () => {
+  const r = dedupeRoots(['Z:/Projects', 'Z:/Projects-Archive']);
+  assert.equal(r.roots.length, 2, 'a name prefix is not containment');
 });
 
 // The guard: passing a Drive mount as a NAS root must be refused outright.

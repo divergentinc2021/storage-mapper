@@ -38,6 +38,39 @@ export function looksLikeDriveMount(p) {
   return DRIVE_MOUNT_HINTS.some((re) => re.test(p));
 }
 
+/**
+ * Drop roots that sit inside another chosen root.
+ *
+ * Picking "H:\Shared drives" AND "H:\Shared drives\UIZ - PROJECTS" walks the
+ * second one twice, so every file in it appears twice in the index and every
+ * count is inflated. Easy to do by accident in the folder picker, and silent.
+ *
+ * @returns {{roots: string[], dropped: {root:string, insideOf:string}[]}}
+ */
+export function dedupeRoots(roots) {
+  const norm = (p) => {
+    let s = path.resolve(p).split(path.sep).join('/');
+    if (process.platform === 'win32') s = s.toLowerCase();
+    return s.replace(/\/+$/, '');
+  };
+  const seen = new Map();
+  for (const r of roots) {
+    const k = norm(r);
+    if (!seen.has(k)) seen.set(k, r); // exact duplicates collapse here
+  }
+  const keys = [...seen.keys()];
+  const kept = [], dropped = [];
+  for (const k of keys) {
+    const parent = keys.find((o) => o !== k && k.startsWith(o + '/'));
+    if (parent) dropped.push({ root: seen.get(k), insideOf: seen.get(parent) });
+    else kept.push(seen.get(k));
+  }
+  // An exact duplicate of a kept root is also a drop worth reporting.
+  const exactDupes = roots.length - seen.size;
+  for (let i = 0; i < exactDupes; i++) dropped.push({ root: '(duplicate entry)', insideOf: '' });
+  return { roots: kept, dropped };
+}
+
 /** Junk that should never count as content on either side. */
 const SKIP_NAMES = new Set([
   '.DS_Store', 'desktop.ini', 'Thumbs.db', '.localized', 'Icon\r',

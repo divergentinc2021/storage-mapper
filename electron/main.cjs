@@ -9,6 +9,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { fork } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
+const profiles = require('./profiles.cjs');
 
 const ROOT = path.join(__dirname, '..');
 let win = null;
@@ -121,4 +122,61 @@ ipcMain.handle('export-reports', async () => {
   const summary = writeAll(outDir, lastRun.result, lastRun.overlap);
   writeCopyPlan(outDir, lastRun.result, lastRun.driveRoot || '');
   return { ok: true, outDir, summary };
+});
+
+// ── profiles ────────────────────────────────────────────────────────────────
+ipcMain.handle('profiles-list', async () => profiles.list(app));
+ipcMain.handle('profiles-save', async (_e, p) => profiles.save(app, p));
+ipcMain.handle('profiles-load', async (_e, file) => profiles.load(app, file));
+ipcMain.handle('profiles-delete', async (_e, file) => { profiles.remove(app, file); return true; });
+ipcMain.handle('profiles-set-default', async (_e, file) => { profiles.setDefault(app, file); return true; });
+ipcMain.handle('profiles-settings', async () => profiles.getSettings(app));
+
+/** Default profile plus any pending shared-profile update, read at launch. */
+ipcMain.handle('profiles-boot', async () => {
+  const s = profiles.getSettings(app);
+  let profile = null;
+  if (s.defaultProfile && fs.existsSync(s.defaultProfile)) {
+    profile = profiles.load(app, s.defaultProfile);
+  }
+  return { profile, defaultFile: s.defaultProfile || null, shared: profiles.checkShared(app) };
+});
+
+ipcMain.handle('profiles-export', async (_e, { profile, includeLocal }) => {
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Export profile',
+    defaultPath: `${(profile.name || 'profile').replace(/[^A-Za-z0-9 _.-]/g, '_')}.smprofile.json`,
+    filters: [{ name: 'Storage Mapper profile', extensions: ['json'] }],
+  });
+  if (r.canceled) return { ok: false, canceled: true };
+  profiles.exportProfile(profile, r.filePath, !!includeLocal);
+  return { ok: true, file: r.filePath };
+});
+
+ipcMain.handle('profiles-import', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Import a profile',
+    filters: [{ name: 'Storage Mapper profile', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (r.canceled) return { ok: false, canceled: true };
+  return { ok: true, file: r.filePaths[0], profile: profiles.load(app, r.filePaths[0]) };
+});
+
+/** Point at a profile on a share; the app watches it for team updates. */
+ipcMain.handle('profiles-set-shared', async (_e, pick) => {
+  if (pick === null) { profiles.setSharedPath(app, null); return { ok: true, path: null }; }
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Choose the shared profile (e.g. on the NAS)',
+    filters: [{ name: 'Storage Mapper profile', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (r.canceled) return { ok: false, canceled: true };
+  profiles.setSharedPath(app, r.filePaths[0]);
+  return { ok: true, path: r.filePaths[0], shared: profiles.checkShared(app) };
+});
+
+ipcMain.handle('profiles-shared-applied', async (_e, { hash, shared }) => {
+  profiles.markSharedApplied(app, hash, shared);
+  return true;
 });

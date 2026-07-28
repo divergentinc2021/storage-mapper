@@ -24,6 +24,10 @@
   </svg>
   <h1>Storage Mapper <span>· Drive → NAS</span></h1>
   <div class="spacer"></div>
+  <label style="font-size:11px;color:var(--muted)">PROFILE</label>
+  <select id="profileSel" title="Saved profiles"><option value="">(unsaved)</option></select>
+  <button class="btn" id="btnProfSave" title="Save changes to this profile">Save</button>
+  <button class="btn" id="btnProfMenu" title="Profile actions">⋯</button>
   <button class="btn" id="btnExport" disabled>Export reports…</button>
   <button class="btn" id="btnTheme" title="Toggle theme">◐</button>
 </header>
@@ -73,6 +77,28 @@
     Nothing is copied, moved or deleted — this only produces a plan.
   </div>
 </main>
+
+<dialog id="profDlg">
+  <h2 id="profTitle">Profiles</h2>
+  <p class="hint" id="profHint"></p>
+  <div id="profBody"></div>
+  <div class="dlgfoot"><button class="btn" id="profClose">Close</button></div>
+</dialog>
+
+<dialog id="sharedDlg">
+  <h2>Shared profile updated</h2>
+  <p class="hint" id="sharedHint"></p>
+  <div class="results" id="sharedDiff"></div>
+  <div class="note">
+    Only <b>aliases and mapping rules</b> are shared. Your Drive and NAS folder
+    choices stay local to this machine and are never overwritten.
+  </div>
+  <div class="dlgfoot">
+    <button class="btn" id="sharedFresh">Start fresh</button>
+    <button class="btn" id="sharedKeep">Keep mine</button>
+    <button class="btn primary" id="sharedApply">Load changes</button>
+  </div>
+</dialog>
 
 <dialog id="remapDlg">
   <h2 id="remapTitle">Remap</h2>

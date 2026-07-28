@@ -139,3 +139,20 @@ dialog input[type=text] { width: 100%; font: inherit; font-size: 12px; padding: 
 .dlgfoot { display: flex; gap: 8px; justify-content: flex-end; }
 .note { font-size: 12px; padding: 9px 11px; border-radius: 8px; background: var(--plane); border: 1px solid var(--border); color: var(--text-secondary); margin: 10px 0; }
 .note b { color: var(--text-primary); }
+
+/* profile bar */
+header select {
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  max-width: 220px;
+}
+.profrow { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--grid); font-size: 12px; }
+.profrow:last-child { border-bottom: 0; }
+.profrow .nm { flex: 1; min-width: 0; }
+.profrow .nm small { display: block; color: var(--muted); }
+.profrow .star { color: var(--warning); }
+.warn {
+  font-size: 12px; padding: 9px 11px; border-radius: 8px; margin: 10px 0;
+  background: var(--plane); border: 1px solid var(--serious); color: var(--text-secondary);
+}
+.warn b { color: var(--text-primary); }

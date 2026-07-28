@@ -14,6 +14,17 @@ contextBridge.exposeInMainWorld('mapper', {
   mappingPath: () => ipcRenderer.invoke('mapping-path'),
   exportReports: () => ipcRenderer.invoke('export-reports'),
   revealInFolder: (p) => ipcRenderer.invoke('open-path', p),
+  profilesBoot: () => ipcRenderer.invoke('profiles-boot'),
+  profilesList: () => ipcRenderer.invoke('profiles-list'),
+  profilesSave: (p) => ipcRenderer.invoke('profiles-save', p),
+  profilesLoad: (f) => ipcRenderer.invoke('profiles-load', f),
+  profilesDelete: (f) => ipcRenderer.invoke('profiles-delete', f),
+  profilesSetDefault: (f) => ipcRenderer.invoke('profiles-set-default', f),
+  profilesExport: (profile, includeLocal) => ipcRenderer.invoke('profiles-export', { profile, includeLocal }),
+  profilesImport: () => ipcRenderer.invoke('profiles-import'),
+  profilesSetShared: (pick) => ipcRenderer.invoke('profiles-set-shared', pick),
+  profilesSharedApplied: (hash, shared) => ipcRenderer.invoke('profiles-shared-applied', { hash, shared }),
+  profilesSettings: () => ipcRenderer.invoke('profiles-settings'),
   onProgress: (cb) => {
     const h = (_e, m) => cb(m);
     ipcRenderer.on('progress', h);
