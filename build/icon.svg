@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Storage Mapper">
+  <!--
+    Deliberately NOT the same mark as Google Drive Storage Explorer. Both live in
+    the same taskbar, so a shared icon would be a coin flip every time you click
+    one. Same family (rounded square, same validated red ramp), different motif:
+    two blocks bridged, for "map this side onto that side".
+
+    Only three shapes, and the bridge is 44px tall, because at 16px anything
+    finer dissolves. That was the lesson from the sibling app's first icon.
+
+    NOTE: an XML comment may not contain a double hyphen. One here made this file
+    invalid, and the renderer silently produced a picture of the parse error.
+  -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a40a1b"/>
+      <stop offset="0.55" stop-color="#d34b49"/>
+      <stop offset="1" stop-color="#eed4d1"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="114" ry="114" fill="url(#g)"/>
+
+  <g fill="#ffffff">
+    <rect x="84"  y="128" width="146" height="256" rx="14" opacity="1"/>
+    <rect x="230" y="234" width="52"  height="44"  rx="6"  opacity="0.9"/>
+    <rect x="282" y="128" width="146" height="256" rx="14" opacity="0.62"/>
+  </g>
+</svg>

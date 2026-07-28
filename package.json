@@ -4,7 +4,9 @@
   "description": "Plan a Google Drive to QNAP migration without duplicating anything: finds files already on the NAS under a different name, flags Google-native stubs that cannot be copied, and maps the rest into an existing project taxonomy.",
   "type": "module",
   "main": "electron/main.cjs",
-  "bin": { "storage-mapper": "src/index.mjs" },
+  "bin": {
+    "storage-mapper": "src/index.mjs"
+  },
   "scripts": {
     "test": "node test/run.mjs",
     "map": "node src/index.mjs",
@@ -13,10 +15,13 @@
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
   "private": true,
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3"
   }
 }
