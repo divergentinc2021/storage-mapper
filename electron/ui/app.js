@@ -25,6 +25,41 @@ var SEP = '/';                 // platform separator, learned from appInfo
 
 var $ = function (id) { return document.getElementById(id); };
 
+/**
+ * Electron does NOT implement window.prompt — Chromium there answers
+ * "prompt() is and will not be supported" and returns undefined. Both profile
+ * save paths asked for a name that way, so the guard below them skipped the
+ * write and the first save silently did nothing every single time. Never use
+ * window.prompt in this app; use this.
+ */
+function askText(title, hint, value) {
+  return new Promise(function (resolve) {
+    var dlg = $('askDlg'), input = $('askInput');
+    $('askTitle').textContent = title;
+    $('askHint').textContent = hint || '';
+    input.value = value || '';
+    var done = function (v) {
+      $('askOk').removeEventListener('click', ok);
+      $('askCancel').removeEventListener('click', cancel);
+      input.removeEventListener('keydown', key);
+      dlg.close();
+      resolve(v);
+    };
+    var ok = function () { done(input.value.trim() || null); };
+    var cancel = function () { done(null); };
+    var key = function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); ok(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    };
+    $('askOk').addEventListener('click', ok);
+    $('askCancel').addEventListener('click', cancel);
+    input.addEventListener('keydown', key);
+    dlg.showModal();
+    input.focus();
+    input.select();
+  });
+}
+
 function fmtBytes(n) {
   n = Number(n) || 0;
   if (n < 1024) return n + ' B';
@@ -95,6 +130,14 @@ var FEATURES = [
       d: 'It used to live only on the New tab, which made the feature look missing from anywhere else.' },
     { ico: '#', t: 'Version shown in the header', since: '0.4.1',
       d: 'So "the feature is missing" and "you are on an older build" stop looking identical.' },
+    { ico: 'M', t: 'Map, then Copy', since: '0.5.0',
+      d: 'One decision assigns a destination to every new file. Copy stays locked until you have.' },
+    { ico: 'R', t: 'Copy review', since: '0.5.0',
+      d: 'Incoming against existing. Same name and byte count is skipped; a size mismatch is never overwritten by default.' },
+    { ico: 'H', t: 'Copy history', since: '0.5.0',
+      d: 'Every run journalled — what, by whom, and the engine verdict per folder. Volume rollback is QNAP snapshots; this is the per-run detail.' },
+    { ico: '!', t: 'Profile saving fixed', since: '0.5.1',
+      d: 'Electron does not implement window.prompt, so asking for a profile name returned nothing and the save was silently skipped. It now uses a real dialog and confirms the file it wrote.' },
   ]},
 ];
 
@@ -272,7 +315,8 @@ async function openProfileMenu() {
   });
   var on = function (id, fn) { var el = $(id) || document.getElementById(id); if (el) el.addEventListener('click', fn); };
   on('pmSaveAs', async function () {
-    var n = window.prompt('Profile name', (PROFILE && PROFILE.name) || 'Default');
+    var n = await askText('Save profile as', 'A name for this set of folders and rules.',
+      (PROFILE && PROFILE.name) || 'Default');
     if (n) { await saveProfile(n); openProfileMenu(); }
   });
   on('pmExport', async function () { await window.mapper.profilesExport(profileFromUi(), false); });
@@ -889,12 +933,17 @@ async function init() {
   });
   $('btnProfSave').addEventListener('click', async function () {
     var n = (PROFILE && PROFILE.name) || null;
-    if (!n || !PROFILE_FILE) n = window.prompt('Profile name', n || 'Default');
-    if (n) {
-      await saveProfile(n);
-      $('main').insertAdjacentHTML('afterbegin',
-        '<div class="note"><b>Profile saved.</b> It will load automatically if you set it as default.</div>');
+    if (!n || !PROFILE_FILE) {
+      n = await askText('Save profile as', 'A name for this set of folders and rules.', n || 'Default');
     }
+    if (!n) return;
+    var r = await saveProfile(n);
+    // Confirm what the SERVER actually wrote, with the path, so a failed save
+    // can never look like a successful one again.
+    $('main').insertAdjacentHTML('afterbegin', r && r.file
+      ? '<div class="note"><b>Profile &ldquo;' + esc(n) + '&rdquo; saved.</b> ' +
+        '<small>' + esc(r.file) + '</small> — set it as default (⋯) to load it at startup.</div>'
+      : '<div class="warn"><b>Profile did NOT save.</b> No file path came back from the app.</div>');
   });
   $('btnProfMenu').addEventListener('click', openProfileMenu);
   $('profClose').addEventListener('click', function () { $('profDlg').close(); });

@@ -142,5 +142,78 @@ check('UNC destinations count as absolute', () => {
   assert.equal(api.isAbsoluteDest('Projects\\x'), false);
 });
 
+
+// ── Electron-specific traps ─────────────────────────────────────────────────
+check('the renderer never calls window.prompt (Electron does not implement it)', () => {
+  // This is why the first profile save silently did nothing: prompt() returns
+  // undefined in Electron, and the `if (name)` guard below it skipped the write.
+  const calls = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/\bwindow\.prompt\s*\(/.test(calls),
+    'window.prompt() found — use askText(), which Electron can actually show');
+  assert.ok(!/(^|[^.\w])prompt\s*\(/.test(calls.replace(/askText/g, '')),
+    'a bare prompt() call found');
+});
+
+// ── profile persistence, through the real module ────────────────────────────
+import { createRequire as _cr } from 'node:module';
+import { mkdtempSync, rmSync as _rm, existsSync as _ex, readFileSync as _rf } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+const _require = _cr(import.meta.url);
+const profiles = _require(path.join(ROOT, 'electron', 'profiles.cjs'));
+const userData = mkdtempSync(path.join(tmpdir(), 'sm-profiles-'));
+const fakeApp = { getPath: () => userData };
+
+check('saving a profile actually writes a file that can be read back', () => {
+  const p = profiles.empty('UIZ Windows');
+  p.shared.aliases = [['UIH Dental', 'u0004_Custom_Haptic_VR_Dentistry']];
+  p.local.driveRoots = ['H:\\My Drive'];
+  p.local.nasRoots = ['Z:\\Projects'];
+
+  const r = profiles.save(fakeApp, p);
+  assert.ok(r.file, 'save returned no file path');
+  assert.ok(_ex(r.file), `save reported ${r.file} but nothing is there`);
+
+  const back = profiles.load(fakeApp, r.file);
+  assert.equal(back.name, 'UIZ Windows');
+  assert.deepEqual(back.shared.aliases, [['UIH Dental', 'u0004_Custom_Haptic_VR_Dentistry']]);
+  assert.deepEqual(back.local.nasRoots, ['Z:\\Projects'], 'local paths must round-trip');
+});
+
+check('a saved profile appears in the list with its counts', () => {
+  const list = profiles.list(fakeApp);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].name, 'UIZ Windows');
+  assert.equal(list[0].counts.aliases, 1);
+  assert.equal(list[0].counts.nasRoots, 1);
+});
+
+check('setting a default marks exactly that profile', () => {
+  const list = profiles.list(fakeApp);
+  profiles.setDefault(fakeApp, list[0].file);
+  assert.equal(profiles.list(fakeApp)[0].isDefault, true);
+  assert.equal(profiles.getSettings(fakeApp).defaultProfile, list[0].file);
+});
+
+check('a name with path separators cannot escape the profiles folder', () => {
+  const r = profiles.save(fakeApp, profiles.empty('../../evil/../name'));
+  assert.ok(path.dirname(r.file).endsWith('profiles'),
+    `profile escaped its folder: ${r.file}`);
+});
+
+check('export defaults to rules only — local paths are not leaked', () => {
+  const p = profiles.load(fakeApp, profiles.list(fakeApp).find((x) => x.name === 'UIZ Windows').file);
+  const out = path.join(userData, 'shared.json');
+  profiles.exportProfile(p, out, false);
+  const shared = JSON.parse(_rf(out, 'utf8'));
+  assert.deepEqual(shared.shared.aliases, [['UIH Dental', 'u0004_Custom_Haptic_VR_Dentistry']]);
+  assert.deepEqual(shared.local.nasRoots, [], 'export leaked machine-specific paths');
+  profiles.exportProfile(p, out, true);
+  assert.deepEqual(JSON.parse(_rf(out, 'utf8')).local.nasRoots, ['Z:\\Projects'],
+    'explicit include-paths export should carry them');
+});
+
+_rm(userData, { recursive: true, force: true });
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);
