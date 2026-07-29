@@ -57,8 +57,11 @@ const win = {
 
 const sandbox = { document: doc, window: win, console, setTimeout, Set, JSON, Math, Date };
 const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(){return RESULT}, set RESULT(v){RESULT=v},
-  syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest,
-  get MAPPED(){return MAPPED}, set MAPPED(v){MAPPED=v} };`);
+  syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest, clashingRoots, renderPaths,
+  get MAPPED(){return MAPPED}, set MAPPED(v){MAPPED=v},
+  get DRIVE_ROOTS(){return DRIVE_ROOTS}, set DRIVE_ROOTS(v){DRIVE_ROOTS=v},
+  get NAS_ROOTS(){return NAS_ROOTS}, set NAS_ROOTS(v){NAS_ROOTS=v},
+  get SEP(){return SEP}, set SEP(v){SEP=v} };`);
 const api = fn(...Object.values(sandbox));
 
 let failures = 0;
@@ -68,6 +71,57 @@ const check = (name, f) => {
 };
 
 console.log('\nrenderer: staged Compare -> Map -> Copy\n');
+
+/*
+  The renderer carries its own copy of the both-sides check so it can warn while
+  you are still assembling the lists. That duplication is the risk, so pin it to
+  the authoritative implementation in src/mapplan.mjs on the same inputs — a
+  drift here means the app stops warning about a profile Compare will reject.
+*/
+const { crossOverlap } = await import('../src/mapplan.mjs');
+check('the renderer clash check agrees with mapplan.crossOverlap', () => {
+  api.SEP = '\\';   // Windows semantics: case-insensitive
+  const cases = [
+    [['H:/SD/External Client Projects', 'Z:/Internal UWC Projects'],
+     ['Z:/External Client Projects', 'Z:/Internal UWC Projects']],
+    [['H:/a'], ['Z:/b']],
+    [['Z:/Projects/Sub'], ['Z:/Projects']],
+    [['Z:/Projects'], ['Z:/Projects/Sub']],
+    [['Z:\\Internal UWC Projects\\'], ['z:/internal uwc projects']],
+    [[], ['Z:/a']],
+  ];
+  for (const [d, n] of cases) {
+    api.DRIVE_ROOTS = d; api.NAS_ROOTS = n;
+    const mine = api.clashingRoots().pairs.length;
+    const theirs = crossOverlap(d, n).length;
+    assert.equal(mine, theirs, `disagreed on ${JSON.stringify(d)} vs ${JSON.stringify(n)}`);
+  }
+});
+
+check('a profile loaded with a NAS path in the Drive list warns immediately', () => {
+  api.SEP = '\\';
+  api.DRIVE_ROOTS = ['H:/SD/External Client Projects', 'Z:/Internal UWC Projects'];
+  api.NAS_ROOTS = ['Z:/External Client Projects', 'Z:/Internal UWC Projects'];
+  api.renderPaths();
+  const hint = doc.getElementById('setupHint');
+  assert.match(hint.className, /\bbad\b/, 'the hint must be flagged, not just reworded');
+  assert.match(hint.textContent, /on both sides/);
+  assert.match(hint.textContent, /Internal UWC Projects/, 'it must name the offending folder');
+  // and the offending chip is marked in each list
+  assert.match(doc.getElementById('drivePaths').innerHTML, /chip bad/);
+  assert.match(doc.getElementById('nasPaths').innerHTML, /chip bad/);
+});
+
+check('clean lists leave the hint unflagged', () => {
+  api.SEP = '\\';
+  api.DRIVE_ROOTS = ['H:/SD/External Client Projects'];
+  api.NAS_ROOTS = ['Z:/External Client Projects'];
+  api.renderPaths();
+  const hint = doc.getElementById('setupHint');
+  assert.doesNotMatch(hint.className, /\bbad\b/);
+  assert.match(hint.textContent, /Nothing will be copied/);
+  assert.doesNotMatch(doc.getElementById('drivePaths').innerHTML, /chip bad/);
+});
 
 const copyBtn = doc.getElementById('btnCopyTop');
 const mapBtn = doc.getElementById('btnMapTop');

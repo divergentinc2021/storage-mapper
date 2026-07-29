@@ -56,7 +56,9 @@
   </div>
   <div class="pick">
     <label></label>
-    <div><span id="setupHint" style="font-size:12px;color:var(--muted)"></span></div>
+    <!-- class, not an inline style: the clash warning recolours this via .hint.bad,
+         and an inline colour would outrank the class and silently win. -->
+    <div><span id="setupHint" class="hint"></span></div>
     <button class="btn primary" id="btnCompare" disabled>Compare</button>
   </div>
 </section>

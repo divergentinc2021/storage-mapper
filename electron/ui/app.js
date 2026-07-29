@@ -364,15 +364,46 @@ async function openProfileMenu() {
 }
 
 // ── setup ───────────────────────────────────────────────────────────────────
+/*
+  Pre-flight mirror of crossOverlap() in src/mapplan.mjs.
+
+  Deliberately duplicated rather than reached over IPC: this runs on every
+  keystroke-free redraw of the two lists and only ever changes a hint. The worker
+  copy stays AUTHORITATIVE — this one warns, it does not block, so if the two
+  ever drift the worst case is a missing or spurious hint and Compare still
+  refuses correctly. Keep the normalisation identical: forward slashes, no
+  trailing slash, lowercased (Windows paths differ only in case all the time).
+*/
+function normRoot(p) {
+  var s = String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return SEP === '\\' ? s.toLowerCase() : s;
+}
+function clashingRoots() {
+  var out = { drive: {}, nas: {}, pairs: [] };
+  DRIVE_ROOTS.forEach(function (d, di) {
+    NAS_ROOTS.forEach(function (n, ni) {
+      var nd = normRoot(d), nn = normRoot(n), how = null;
+      if (nd === nn) how = 'the same folder is on both sides';
+      else if (nd.indexOf(nn + '/') === 0) how = 'the Drive folder is inside the NAS folder';
+      else if (nn.indexOf(nd + '/') === 0) how = 'the NAS folder is inside the Drive folder';
+      if (how) { out.drive[di] = 1; out.nas[ni] = 1; out.pairs.push({ drive: d, nas: n, how: how }); }
+    });
+  });
+  return out;
+}
+
 function renderPaths() {
-  var draw = function (el, list, kind) {
+  var clash = clashingRoots();
+  var draw = function (el, list, kind, flagged) {
     el.innerHTML = list.map(function (p, i) {
-      return '<span class="chip"><code title="' + esc(p) + '">' + esc(p) + '</code>' +
+      return '<span class="chip' + (flagged[i] ? ' bad' : '') + '">' +
+        '<code title="' + esc(p) + (flagged[i] ? ' — also on the other side' : '') + '">' +
+        esc(p) + '</code>' +
         '<button data-kind="' + kind + '" data-i="' + i + '" title="Remove">×</button></span>';
     }).join('');
   };
-  draw($('drivePaths'), DRIVE_ROOTS, 'drive');
-  draw($('nasPaths'), NAS_ROOTS, 'nas');
+  draw($('drivePaths'), DRIVE_ROOTS, 'drive', clash.drive);
+  draw($('nasPaths'), NAS_ROOTS, 'nas', clash.nas);
   document.querySelectorAll('.paths .chip button').forEach(function (b) {
     b.addEventListener('click', function () {
       var i = Number(b.dataset.i);
@@ -381,9 +412,22 @@ function renderPaths() {
     });
   });
   $('btnCompare').disabled = !(DRIVE_ROOTS.length && NAS_ROOTS.length);
-  $('setupHint').textContent = DRIVE_ROOTS.length && NAS_ROOTS.length
-    ? 'Nothing will be copied — Compare only produces a plan.'
-    : 'Choose at least one Google Drive folder and one NAS folder.';
+
+  // Say it here, at the moment the lists are drawn, rather than only when
+  // Compare fails several clicks later. Loading a saved profile redraws through
+  // this path, so a profile that was saved with the mistake announces it on load.
+  var hint = $('setupHint');
+  if (clash.pairs.length) {
+    hint.className = 'hint bad';
+    hint.textContent = (clash.pairs.length === 1 ? 'One folder is' : clash.pairs.length + ' folders are') +
+      ' on both sides — ' + clash.pairs[0].how + ': ' + clash.pairs[0].drive +
+      '. Compare will refuse until it is removed from one side.';
+  } else {
+    hint.className = 'hint';
+    hint.textContent = DRIVE_ROOTS.length && NAS_ROOTS.length
+      ? 'Nothing will be copied — Compare only produces a plan.'
+      : 'Choose at least one Google Drive folder and one NAS folder.';
+  }
 }
 
 function setAccuracy(mode, stats) {
@@ -426,8 +470,11 @@ async function runCompare() {
   $('btnCompare').disabled = false;
 
   if (res.type === 'error') {
-    $('main').innerHTML = '<div class="empty"><b>Comparison failed</b><br><br>' +
-      esc(res.message) + '</div>';
+    // pre-wrap, because these messages are laid out with newlines and indented
+    // bullets. Dropped into centred HTML they collapsed into one run-on line and
+    // the per-folder detail became unreadable.
+    $('main').innerHTML = '<div class="empty"><b>Comparison failed</b>' +
+      '<pre class="errmsg">' + esc(res.message) + '</pre></div>';
     return;
   }
 

@@ -1,0 +1,118 @@
+# Build and publish the Windows installer, then prune older releases.
+#
+# There was no workflow here before: every release up to v0.6.0 was built on a
+# laptop and uploaded by hand. That is also the most likely reason a "v0.6.1"
+# was believed to exist — nothing in the repo records or enforces a release, so a
+# build that was never tagged and pushed leaves no trace either way.
+#
+# Cleanup deletes the RELEASE and its installer but KEEPS the git tag. Tags cost
+# nothing and are what lets you check out and rebuild an old version; deleting
+# them would throw that away for no space saving.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # So cleanup can be run on its own, without cutting a release.
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 'Number of most recent releases to keep'
+        required: false
+        default: '1'
+
+permissions:
+  contents: write
+
+env:
+  # Overridden by the workflow_dispatch input. Clamped to >= 1 in the step, so a
+  # stray 0 can never delete the release that was just published.
+  KEEP_DEFAULT: '1'
+
+jobs:
+  build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Guard the exact failure this workflow was added after: a tag and a
+      # package.json version that disagree. The installer takes its filename and
+      # the in-app version badge from package.json, so a mismatch ships a build
+      # that reports the wrong version and cannot be traced back to a tag.
+      - name: Tag must match package.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          echo "tag=$tag package.json=$pkg"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag v$tag does not match package.json $pkg. Bump package.json, commit, then retag."
+            exit 1
+          fi
+
+      - run: npm test
+
+      - name: Build installer
+        run: npx electron-builder --win --publish never
+
+      # Glob rather than a fixed filename: electron-builder's output name follows
+      # productName and arch, and pinning it here would break silently the first
+      # time either changes.
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(dist/*.exe)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::electron-builder produced no .exe in dist/"
+            ls -la dist || true
+            exit 1
+          fi
+          printf 'publishing: %s\n' "${files[@]}"
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --title "$GITHUB_REF_NAME" --generate-notes
+
+  cleanup:
+    # Runs after a successful publish, or on its own via workflow_dispatch.
+    needs: build
+    if: always() && (needs.build.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete older releases, keep their tags
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEEP: ${{ github.event.inputs.keep || env.KEEP_DEFAULT }}
+        run: |
+          set -euo pipefail
+          keep="$KEEP"
+          case "$keep" in ''|*[!0-9]*) keep=1 ;; esac
+          [ "$keep" -lt 1 ] && keep=1
+          echo "keeping the $keep most recent release(s)"
+
+          # Sort by creation time, not by tag name: v0.10.0 sorts before v0.9.0
+          # as a string, so name ordering would delete the newest release.
+          mapfile -t tags < <(gh release list --repo "$REPO" --limit 200 \
+            --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[].tagName')
+
+          echo "found ${#tags[@]} release(s): ${tags[*]:-none}"
+          if [ "${#tags[@]}" -le "$keep" ]; then
+            echo "nothing to prune"
+            exit 0
+          fi
+
+          for t in "${tags[@]:$keep}"; do
+            echo "deleting release $t (git tag kept)"
+            gh release delete "$t" --repo "$REPO" --yes
+          done

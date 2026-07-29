@@ -319,3 +319,32 @@ Two mechanisms instead, at different levels:
 Snapshots answer *"put the volume back"*. The journal answers *"which files did
 that particular run add"* — and because the copy is additive-only, that list
 **is** the reversal.
+
+## Releasing
+
+Everything up to v0.6.0 was built on a laptop and uploaded by hand, which is why
+a release that was never tagged left no trace either way. It is a workflow now:
+`.github/workflows/release.yml`, triggered by pushing a `v*` tag.
+
+```bash
+# 1. bump the version FIRST — the workflow fails the build if it disagrees
+npm version 0.6.1 --no-git-tag-version
+git commit -am "v0.6.1 — what changed"
+git push
+
+# 2. tag; the push is what triggers the build
+git tag v0.6.1 && git push origin v0.6.1
+```
+
+The workflow runs the tests, refuses to continue if the tag and `package.json`
+version disagree, builds the NSIS installer, publishes it, and then prunes older
+releases.
+
+**Cleanup deletes the release and its installer but keeps the git tag.** Tags cost
+nothing and are what lets you check out and rebuild an old version — deleting them
+would throw that away for no space saving. It keeps the most recent release only;
+change the count with the `keep` input, and run it on its own from the Actions tab
+(**Release → Run workflow**) without cutting a release.
+
+`npm run build:win` still works for a local build; it just does not produce a
+release.

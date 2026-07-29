@@ -33,9 +33,14 @@ process.on('message', async (msg) => {
     // confidently wrong answer.
     const clash = crossOverlap(driveRoots, nasRoots);
     if (clash.length) {
+      // The heading must not restate `how`. Two of the three cases are nesting,
+      // not equality, and hard-coding "the same folder" here produced the
+      // sentence twice in a row for the equality case.
       throw new Error(
-        'The same folder is in both lists:\n\n' +
-        clash.map((c) => `  • ${c.drive}\n    ${c.how}\n    (NAS: ${c.nas})`).join('\n\n') +
+        (clash.length === 1
+          ? 'A folder appears on both sides:'
+          : `${clash.length} folders appear on both sides:`) + '\n\n' +
+        clash.map((c) => `  • Google Drive: ${c.drive}\n    NAS:          ${c.nas}\n    ${c.how}`).join('\n\n') +
         '\n\nRemove it from one side. Comparing a folder with itself reports every ' +
         'file as already on the NAS, and mapping it would copy it onto its own source.'
       );
