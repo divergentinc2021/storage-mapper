@@ -101,6 +101,9 @@ h1 span { font-weight: 400; color: var(--text-secondary); }
 }
 .badge.exact { color: var(--good); }
 .badge.approx { color: #8a5a00; }
+/* A manifest that parsed to nothing is a mistake, not a mode — it reads as an
+   error rather than as the amber "this is the weaker tier" state. */
+.badge.bad { color: var(--critical); border-color: var(--critical); background: rgba(208,59,59,.08); }
 :root[data-theme="dark"] .badge.approx { color: var(--warning); }
 @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .badge.approx { color: var(--warning); } }
 

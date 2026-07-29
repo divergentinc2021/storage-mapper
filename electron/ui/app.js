@@ -108,6 +108,10 @@ var FEATURES = [
       d: 'In Stream mode reading a file downloads it. Only NAS files whose size collides with a Drive file are hashed.' },
     { ico: 'v', t: 'Nested folders collapsed', since: '0.3.0',
       d: 'Choosing a folder and one inside it used to walk the inner one twice and double every count.' },
+    { ico: '#', t: 'The accuracy badge no longer guesses', since: '0.6.2',
+      d: 'Loading a profile claimed "Exact — md5 from Drive API" whenever a manifest path was stored, without opening the file. It now reads "Manifest set — not read yet" until Compare has actually parsed it.' },
+    { ico: '!', t: 'An unusable manifest says so, loudly', since: '0.6.2',
+      d: 'A CSV that parses to zero usable rows used to drop to size+name in silence. It is now flagged red with the columns it needs. Feeding this app its own new.csv report does exactly that: no bytes, md5 or drive_id column, so every row is discarded.' },
   ]},
   { group: 'Teaching it', items: [
     { ico: 'L', t: 'Already on NAS…',
@@ -211,7 +215,11 @@ function applyProfileToUi(p) {
   DRIVE_ROOTS = ((PROFILE.local && PROFILE.local.driveRoots) || []).slice();
   NAS_ROOTS = ((PROFILE.local && PROFILE.local.nasRoots) || []).slice();
   MANIFEST = (PROFILE.local && PROFILE.local.manifestPath) || null;
-  if (MANIFEST) { setAccuracy('exact', null); $('accText').textContent = MANIFEST; }
+  // NOT 'exact'. A stored manifest path says a file was chosen once, not that it
+  // is usable — and claiming exact here is how a run that silently matched on
+  // size+name displayed "Exact — md5 from Drive API" the whole way through.
+  // Only Compare can know, because only Compare parses the file.
+  if (MANIFEST) setAccuracy('pending', null, MANIFEST);
   else setAccuracy('approximate', null);
   renderPaths();
 }
@@ -436,7 +444,7 @@ function renderPaths() {
   }
 }
 
-function setAccuracy(mode, stats) {
+function setAccuracy(mode, stats, path) {
   var badge = $('accBadge'), text = $('accText');
   if (mode === 'exact') {
     badge.className = 'badge exact';
@@ -445,6 +453,26 @@ function setAccuracy(mode, stats) {
       ? stats.withMd5.toLocaleString() + ' of ' + stats.count.toLocaleString() +
         ' manifest rows carry a checksum. Renamed copies will still be detected.'
       : 'Checksums loaded.';
+  } else if (mode === 'pending') {
+    // A path is set but nothing has parsed it yet. Say exactly that.
+    badge.className = 'badge approx';
+    badge.textContent = 'Manifest set — not read yet';
+    text.textContent = (path || '') + ' — run Compare to check it.';
+  } else if (mode === 'unusable') {
+    /*
+      The file parsed but yielded nothing this tool can match on. Loud, because
+      the failure is invisible otherwise: matching silently drops to size+name,
+      and size+name matches a template or a generated artefact across unrelated
+      projects. Seen in the field: storage-mapper's OWN new.csv report was loaded
+      as the manifest — its columns are drivePath,name,size,... so `bytes`, `md5`
+      and `drive_id` were all absent and every row was discarded.
+    */
+    badge.className = 'badge bad';
+    badge.textContent = 'Manifest unusable — falling back to size + name';
+    text.innerHTML = 'Read <b>0</b> usable rows from ' + esc(path || 'the CSV') +
+      '. Needs the <code>bytes</code> and <code>md5</code> columns — export ' +
+      '<b>studiodrive-manifest.csv</b> from Storage Explorer (<i>Export manifest CSV</i>), ' +
+      'not a report this app wrote.';
   } else if (mode === 'no-md5') {
     badge.className = 'badge approx';
     badge.textContent = 'Approximate — manifest has no md5 column';
@@ -486,7 +514,7 @@ async function runCompare() {
 
   RESULT = res.result;
   OVERLAP = res.overlap || [];
-  setAccuracy(res.accuracy, res.manifestStats);
+  setAccuracy(res.accuracy, res.manifestStats, MANIFEST);
   DROPPED = res.droppedRoots || [];
   $('btnExport').disabled = false;
   MAPPED = null;

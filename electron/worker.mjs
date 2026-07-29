@@ -105,7 +105,12 @@ process.on('message', async (msg) => {
       overlap,
       nasIndex,
       droppedRoots,
-      accuracy: manifest.withMd5 > 0 ? 'exact' : (manifest.count > 0 ? 'no-md5' : 'approximate'),
+      /* 'unusable' is distinct from 'approximate' on purpose: no manifest at all is
+         a choice, whereas a manifest that parsed to zero usable rows is a mistake
+         that otherwise degrades in complete silence. */
+      accuracy: manifest.withMd5 > 0 ? 'exact'
+        : manifest.count > 0 ? 'no-md5'
+        : (manifestPath ? 'unusable' : 'approximate'),
       manifestStats: { count: manifest.count, withMd5: manifest.withMd5 },
     });
   } catch (e) {
