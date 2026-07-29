@@ -142,6 +142,12 @@ var FEATURES = [
       d: 'A path in the Drive AND NAS lists compares a tree with itself — everything reads as already on the NAS. Compare now stops and says which one.' },
     { ico: '!', t: 'Profile saving fixed', since: '0.5.1',
       d: 'Electron does not implement window.prompt, so asking for a profile name returned nothing and the save was silently skipped. It now uses a real dialog and confirms the file it wrote.' },
+    { ico: '⚠', t: 'Both-sides folder flagged as you load it', since: '0.6.1',
+      d: 'A folder listed as both Drive and NAS is now outlined in red the moment the lists are drawn, so a profile saved with the mistake says so on load instead of failing several clicks later at Compare.' },
+    { ico: '¶', t: 'Comparison errors are readable', since: '0.6.1',
+      d: 'The failure message was laid out with newlines and bullets, then dropped into centred HTML where they collapsed into one run-on line. It also restated its own heading. Both fixed.' },
+    { ico: '⚙', t: 'Releases are built by CI', since: '0.6.1',
+      d: 'Pushing a v* tag builds, tests, refuses to continue if the tag and package.json disagree, publishes, and prunes older releases while keeping their git tags. Every build up to 0.6.0 was made on a laptop by hand.' },
   ]},
 ];
 
