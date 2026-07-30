@@ -5,7 +5,7 @@
  * It imports the same src/ modules the CLI uses — there is no second copy of the
  * matching logic to drift out of sync with the tested one.
  */
-import { walk, looksLikeDriveMount, dedupeRoots, probeRoot } from '../src/walk.mjs';
+import { walk, driveMountVerdict, dedupeRoots, probeRoot } from '../src/walk.mjs';
 import { loadManifest, emptyManifest } from '../src/manifest.mjs';
 import { loadMapping } from '../src/mapping.mjs';
 import { match, nasInternalOverlap } from '../src/match.mjs';
@@ -143,9 +143,10 @@ process.on('message', async (msg) => {
     }
 
     for (const r of nasRoots) {
-      if (looksLikeDriveMount(r)) {
+      const v = driveMountVerdict(r);
+      if (v.drive) {
         throw new Error(
-          `"${r}" looks like a Google Drive mount. Hashing one would force a full ` +
+          `"${r}" is a Google Drive mount — ${v.why}. Hashing one would force a full ` +
           `download of every file. Choose it as the Google Drive folder instead.`
         );
       }

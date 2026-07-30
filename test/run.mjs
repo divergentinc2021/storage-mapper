@@ -504,5 +504,69 @@ check('probeRoot reports a file as not-a-folder rather than empty', () => {
   assert.match(p.error, /not a folder/);
 });
 
+// ── Drive mount detection ───────────────────────────────────────────────────
+/*
+ * Reported from the field: a NAS share at Z:\SHARED DRIVES was refused as
+ * "looks like a Google Drive mount", because the old check matched the folder
+ * NAME alone. It blocked Compare completely, and md5File would have refused to
+ * hash anything under it, so the whole profile was unusable.
+ *
+ * listRoot is injected here so the cases run identically on any machine — the
+ * point under test is the decision, not this developer's drive letters.
+ */
+const DRIVE_ROOT_LISTINGS = {
+  'H:\\': ['My Drive', 'Shared drives', 'Other computers'],   // real Drive for Desktop
+  'Z:\\': ['SHARED DRIVES', 'Projects', 'Archive'],           // NAS that merely uses the name
+  '/Volumes/NAS': ['Shared drives', 'Media'],
+};
+const listRoot = (r) => {
+  if (Object.prototype.hasOwnProperty.call(DRIVE_ROOT_LISTINGS, r)) return DRIVE_ROOT_LISTINGS[r];
+  throw new Error('ENOENT');
+};
+
+check('a NAS folder merely NAMED "SHARED DRIVES" is not a Drive mount', () => {
+  wk._resetVolumeCache();
+  const v = wk.driveMountVerdict('Z:\\SHARED DRIVES', { listRoot });
+  assert.equal(v.drive, false, 'this refusal blocked a real user completely');
+  wk._resetVolumeCache();
+  assert.equal(wk.looksLikeDriveMount('Z:\\SHARED DRIVES\\Projects\\clip.mp4', { listRoot }), false);
+});
+
+check('a real Drive for Desktop path is still refused', () => {
+  wk._resetVolumeCache();
+  assert.equal(wk.looksLikeDriveMount('H:\\Shared drives\\UIH - JIGSPACE', { listRoot }), true);
+  wk._resetVolumeCache();
+  assert.equal(wk.looksLikeDriveMount('H:\\My Drive\\thing.mp4', { listRoot }), true);
+});
+
+check('paths that name Google explicitly need no corroboration', () => {
+  wk._resetVolumeCache();
+  // No listRoot entry for these volumes: the strong patterns must settle it
+  // without ever touching the filesystem.
+  assert.equal(wk.looksLikeDriveMount(
+    '/Users/x/Library/CloudStorage/GoogleDrive-a@b.com/Shared drives/Y', { listRoot }), true);
+  assert.equal(wk.looksLikeDriveMount('/Volumes/GoogleDrive/My Drive/Y', { listRoot }), true);
+});
+
+check('an unreadable volume root fails CLOSED, not open', () => {
+  wk._resetVolumeCache();
+  // Q:\ is not in the listing table, so listRoot throws. Refusing a folder the
+  // user can re-point is far cheaper than downloading someone's whole Drive.
+  assert.equal(wk.looksLikeDriveMount('Q:\\Shared drives\\X', { listRoot }), true);
+});
+
+check('an ordinary NAS path is untouched by any of this', () => {
+  wk._resetVolumeCache();
+  assert.equal(wk.looksLikeDriveMount('Z:\\Projects\\Amanzi\\clip.mp4', { listRoot }), false);
+  assert.equal(wk.looksLikeDriveMount('/Volumes/NAS/Media/x.mov', { listRoot }), false);
+});
+
+check('volumeRootOf handles drive letters, UNC and /Volumes', () => {
+  assert.equal(wk.volumeRootOf('Z:\\SHARED DRIVES\\x'), 'Z:\\');
+  assert.equal(wk.volumeRootOf('\\\\qnap\\media\\Shared drives\\x'), '\\\\qnap\\media');
+  assert.equal(wk.volumeRootOf('/Volumes/NAS/Shared drives/x'), '/Volumes/NAS');
+  assert.equal(wk.volumeRootOf('/home/x/Shared drives/y'), '/');
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

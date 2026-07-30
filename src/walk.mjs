@@ -25,17 +25,104 @@ export function toLongPath(p) {
   return abs.startsWith('\\\\') ? `\\\\?\\UNC\\${abs.slice(2)}` : `\\\\?\\${abs}`;
 }
 
-/** Heuristics for "this path is a Google Drive for Desktop mount". */
-const DRIVE_MOUNT_HINTS = [
-  /[/\\]My Drive([/\\]|$)/i,
-  /[/\\]Shared drives([/\\]|$)/i,
-  /[/\\]Shared with me([/\\]|$)/i,
+/*
+ * "Is this a Google Drive for Desktop mount?"
+ *
+ * NAME ALONE IS NOT AN ANSWER, and treating it as one broke a real setup: a NAS
+ * share at Z:\SHARED DRIVES matched the "Shared drives" pattern, so Compare
+ * refused it outright and md5File would have refused to hash anything under it.
+ * "Shared drives", "My Drive" and "Shared with me" are ordinary folder names
+ * that anyone may use on a NAS; they are only meaningful as Drive markers when
+ * the VOLUME they sit on is itself a Drive mount.
+ *
+ * So the patterns are split. The strong ones name Google explicitly and settle
+ * it on their own. The weak ones are folder names that need corroborating: read
+ * the volume root and see whether "My Drive" is actually there, which every
+ * Drive for Desktop mount has and a NAS share essentially never does.
+ */
+const DRIVE_MOUNT_STRONG = [
   /[/\\]CloudStorage[/\\]GoogleDrive-/i,
   /^\/Volumes\/GoogleDrive/i,
 ];
+const DRIVE_MOUNT_WEAK = [
+  /[/\\]My Drive([/\\]|$)/i,
+  /[/\\]Shared drives([/\\]|$)/i,
+  /[/\\]Shared with me([/\\]|$)/i,
+];
 
-export function looksLikeDriveMount(p) {
-  return DRIVE_MOUNT_HINTS.some((re) => re.test(p));
+/** The mount a path belongs to: `Z:\`, `\\server\share`, `/Volumes/NAS`, or `/`. */
+export function volumeRootOf(p) {
+  const s = String(p);
+  if (IS_WIN || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith('\\\\')) {
+    const unc = /^\\\\([^\\/]+)[\\/]([^\\/]+)/.exec(s);
+    if (unc) return `\\\\${unc[1]}\\${unc[2]}`;
+    const drv = /^([A-Za-z]:)/.exec(s);
+    if (drv) return `${drv[1]}\\`;
+  }
+  const vol = /^(\/Volumes\/[^/]+)/.exec(s);
+  if (vol) return vol[1];
+  return '/';
+}
+
+/*
+ * The directory that HOLDS the Drive-looking segment. For H:\Shared drives\X
+ * that is H:\ — the mount root, which is where the corroborating "My Drive"
+ * would live. Deliberately not volumeRootOf: a Drive mount is not always at a
+ * volume root (the test fixture puts one at .../drive/My Drive), and the mount
+ * root is the thing that actually defines a Drive mount.
+ */
+function containerOfMatch(p, re) {
+  const m = re.exec(String(p));
+  if (!m) return null;
+  const head = String(p).slice(0, m.index);
+  if (!head) return '/';
+  return /^[A-Za-z]:$/.test(head) ? head + '\\' : head;
+}
+
+// md5File asks per FILE, so without this every hash would readdir the mount.
+const DIR_IS_DRIVE_ROOT = new Map();
+export function _resetVolumeCache() { DIR_IS_DRIVE_ROOT.clear(); }
+
+function holdsMyDrive(dir, listRoot) {
+  if (DIR_IS_DRIVE_ROOT.has(dir)) return DIR_IS_DRIVE_ROOT.get(dir);
+  let verdict;
+  try {
+    const names = listRoot
+      ? listRoot(dir)
+      : readdirSync(toLongPath(dir), { withFileTypes: true })
+          .filter((e) => e.isDirectory()).map((e) => e.name);
+    verdict = names.some((n) => String(n).toLowerCase() === 'my drive');
+  } catch {
+    /*
+     * Unreadable. Assume Drive: this guard exists to stop a full download of
+     * somebody's entire Drive, which is far more costly to get wrong than
+     * refusing a folder the user can simply re-point.
+     */
+    verdict = true;
+  }
+  DIR_IS_DRIVE_ROOT.set(dir, verdict);
+  return verdict;
+}
+
+export function driveMountVerdict(p, opts = {}) {
+  if (DRIVE_MOUNT_STRONG.some((re) => re.test(p))) {
+    return { drive: true, why: 'the path names a Google Drive mount' };
+  }
+  const weak = DRIVE_MOUNT_WEAK.find((re) => re.test(p));
+  if (!weak) return { drive: false, why: '' };
+
+  const dir = containerOfMatch(p, weak);
+  if (holdsMyDrive(dir, opts.listRoot)) {
+    return { drive: true, why: `${dir} contains "My Drive", so it is a Drive mount` };
+  }
+  return {
+    drive: false,
+    why: `a folder named like Drive's, but ${dir} has no "My Drive" — treated as ordinary storage`,
+  };
+}
+
+export function looksLikeDriveMount(p, opts) {
+  return driveMountVerdict(p, opts).drive;
 }
 
 /**
