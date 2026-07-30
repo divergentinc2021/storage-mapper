@@ -39,6 +39,44 @@ export function looksLikeDriveMount(p) {
 }
 
 /**
+ * What state is this destination in — populated, genuinely empty, or not there?
+ *
+ * The three have to be told apart before anything is allowed to skip Compare.
+ * match() treats an empty NAS side as "every file is new", and walk() turns an
+ * unreadable directory into an error record that match() then drops silently —
+ * so a mistyped, unmounted or offline NAS root produces the same clean
+ * "everything is new" as a fresh empty folder. That is a safe-looking answer to
+ * a question that was never actually asked, and it is the failure this returns
+ * enough information to refuse.
+ *
+ * Cheap on purpose: one readdir, no recursion, so it can run on every path edit.
+ */
+export function probeRoot(root) {
+  const out = { root, exists: false, readable: false, empty: false, entries: 0, error: '' };
+  let st;
+  try {
+    st = statSync(toLongPath(root));
+  } catch (e) {
+    out.error = e.code === 'ENOENT' ? 'does not exist' : (e.code || e.message);
+    return out;
+  }
+  out.exists = true;
+  if (!st.isDirectory()) { out.error = 'not a folder'; return out; }
+  try {
+    // Same exclusions the walk uses. A NAS share holding nothing but @eaDir
+    // thumbnails or a #recycle bin is empty for every purpose this app has.
+    const ents = readdirSync(toLongPath(root), { withFileTypes: true })
+      .filter((e) => !SKIP_NAMES.has(e.name) && !(e.isDirectory() && SKIP_DIRS.has(e.name)));
+    out.readable = true;
+    out.entries = ents.length;
+    out.empty = ents.length === 0;
+  } catch (e) {
+    out.error = e.code || e.message;
+  }
+  return out;
+}
+
+/**
  * Drop roots that sit inside another chosen root.
  *
  * Picking "H:\Shared drives" AND "H:\Shared drives\UIZ - PROJECTS" walks the

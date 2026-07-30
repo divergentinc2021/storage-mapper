@@ -74,6 +74,7 @@ h1 span { font-weight: 400; color: var(--text-secondary); }
 .setup { padding: 14px 16px; display: grid; gap: 10px; border-bottom: 1px solid var(--border); background: var(--surface-1); flex: none; }
 .pick { display: grid; grid-template-columns: 140px 1fr auto; gap: 10px; align-items: center; }
 .pick label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.pick .actions { display: flex; gap: 8px; align-items: center; }
 .paths {
   min-height: 30px; border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px;
   background: var(--plane); font-size: 12px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
@@ -155,6 +156,22 @@ dialog input[type=text] { width: 100%; font: inherit; font-size: 12px; padding: 
 .results div.row.sel { background: var(--plane); outline: 2px solid var(--accent); outline-offset: -2px; }
 .results small { color: var(--muted); display: block; word-break: break-all; }
 .dlgfoot { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Export picker. One row per thing that can be written, each saying whether it
+   is available and why not — a disabled row that explains itself is worth more
+   than a hidden one, which just looks like the feature does not exist. */
+.exportlist { display: grid; gap: 8px; margin: 12px 0 14px; }
+.exportrow {
+  display: grid; gap: 3px; text-align: left; font: inherit; cursor: pointer;
+  padding: 11px 13px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--plane); color: var(--text-primary);
+}
+.exportrow:hover:not(:disabled) { border-color: var(--accent, #d34b49); }
+.exportrow:disabled { opacity: .55; cursor: default; }
+.exportrow .et { font-size: 13px; font-weight: 600; }
+.exportrow .ed { font-size: 11px; color: var(--text-secondary); }
+.exportrow .en { font-size: 11px; color: var(--muted); font-style: italic; }
+.okline { font-size: 12px; color: var(--text-secondary); }
 .note { font-size: 12px; padding: 9px 11px; border-radius: 8px; background: var(--plane); border: 1px solid var(--border); color: var(--text-secondary); margin: 10px 0; }
 .note b { color: var(--text-primary); }
 

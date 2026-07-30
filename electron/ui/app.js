@@ -426,6 +426,8 @@ function renderPaths() {
     });
   });
   $('btnCompare').disabled = !(DRIVE_ROOTS.length && NAS_ROOTS.length);
+  // Scan needs only a source. That is the whole point of it.
+  $('btnScan').disabled = !DRIVE_ROOTS.length;
 
   // Say it here, at the moment the lists are drawn, rather than only when
   // Compare fails several clicks later. Loading a saved profile redraws through
@@ -440,7 +442,9 @@ function renderPaths() {
     hint.className = 'hint';
     hint.textContent = DRIVE_ROOTS.length && NAS_ROOTS.length
       ? 'Nothing will be copied — Compare only produces a plan.'
-      : 'Choose at least one Google Drive folder and one NAS folder.';
+      : DRIVE_ROOTS.length
+        ? 'No NAS folder yet — Scan only will index the Drive side so you can map and export a manifest.'
+        : 'Choose a Google Drive folder. A NAS folder is only needed to compare.';
   }
 }
 
@@ -509,11 +513,22 @@ async function runCompare() {
     // the per-folder detail became unreadable.
     $('main').innerHTML = '<div class="empty"><b>Comparison failed</b>' +
       '<pre class="errmsg">' + esc(res.message) + '</pre></div>';
+    /*
+      Reset the stage. These used to be left alone on the failure path, so after
+      a compare that failed the buttons still pointed at the PREVIOUS run: Export
+      stayed lit and quietly wrote the older result's CSVs, and Map still offered
+      rows that no longer had a comparison behind them. Stale-but-lit is worse
+      than dark, because nothing on screen says which run you are looking at.
+    */
+    RESULT = null; MAPPED = null; OVERLAP = []; SCANNED = false;
+    $('btnExport').disabled = true;
+    syncStageButtons();
     return;
   }
 
   RESULT = res.result;
   OVERLAP = res.overlap || [];
+  SCANNED = false;
   setAccuracy(res.accuracy, res.manifestStats, MANIFEST);
   DROPPED = res.droppedRoots || [];
   $('btnExport').disabled = false;
@@ -521,6 +536,78 @@ async function runCompare() {
   renderCounts();
   syncStageButtons();
   renderTab();
+}
+
+var SCANNED = false;
+
+/**
+ * Index the Drive side alone — for a destination that does not exist yet.
+ *
+ * Everything comes back as "new", which is not a shortcut: it is the same answer
+ * a comparison against an empty folder produces, arrived at without walking a
+ * tree that is not there. Map and the manifest export both open from here.
+ */
+async function runScan() {
+  $('btnScan').disabled = true;
+  $('btnCompare').disabled = true;
+  $('bar').hidden = false;
+  $('barFill').style.width = '5%';
+  $('barText').textContent = 'Starting…';
+  $('emptyState').hidden = true;
+
+  MAPPING.driveRoots = [];
+  MAPPING.nasRoots = [];
+
+  var res = await window.mapper.scan({
+    driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS, mapping: MAPPING,
+  });
+
+  $('bar').hidden = true;
+  renderPaths();
+
+  if (res.type === 'error') {
+    $('main').innerHTML = '<div class="empty"><b>Scan failed</b>' +
+      '<pre class="errmsg">' + esc(res.message) + '</pre></div>';
+    RESULT = null; MAPPED = null; SCANNED = false;
+    $('btnExport').disabled = true;
+    syncStageButtons();
+    return;
+  }
+
+  RESULT = res.result;
+  OVERLAP = [];
+  SCANNED = true;
+  DROPPED = res.droppedRoots || [];
+  MAPPED = null;
+  setAccuracy('scan', null, MANIFEST);
+  $('btnExport').disabled = false;
+  renderCounts();
+  syncStageButtons();
+  renderTab();
+  noteScan(res);
+}
+
+/*
+ * Say plainly that this was not a comparison.
+ *
+ * A scan cannot know whether a file is already at the destination, so calling
+ * everything "new" is only honest while the user remembers no comparison
+ * happened. If a NAS folder IS set and does have content, say so — that is the
+ * case where scanning is the wrong tool and Compare is right there.
+ */
+function noteScan(res) {
+  var probes = res.nasProbes || [];
+  var populated = probes.filter(function (p) { return p.exists && p.readable && !p.empty; });
+  var msg = '<div class="warn"><b>Scanned, not compared.</b> Every file is listed as new ' +
+    'because nothing was checked against a destination.';
+  if (populated.length) {
+    msg += ' <b>' + populated.length + ' NAS folder(s) already contain files</b> — run ' +
+      '<i>Compare</i> instead, or copies you already made will be listed again.';
+  } else if (probes.length) {
+    msg += ' The NAS folder(s) you chose are empty, so this matches what a comparison would say.';
+  }
+  msg += '</div>';
+  $('main').insertAdjacentHTML('afterbegin', msg);
 }
 
 /**
@@ -775,8 +862,9 @@ function syncStageButtons() {
   var newCount = RESULT ? RESULT.new.length : 0;
   mapBtn.disabled = !newCount;
   mapBtn.textContent = newCount ? 'Map ' + newCount.toLocaleString() + ' new…' : 'Map…';
-  mapBtn.title = !RESULT ? 'Run a comparison first'
+  mapBtn.title = !RESULT ? 'Run Scan only, or Compare, first'
     : newCount ? 'Choose where the new files should go'
+    : SCANNED ? 'Nothing was found in the folders you scanned'
     : 'Nothing new — everything is already on the NAS';
 
   var ready = MAPPED ? MAPPED.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); }) : [];
@@ -1020,6 +1108,67 @@ async function startCopy(dryRun) {
   $('copyFill').style.width = '100%';
   $('copyStatus').textContent = 'Finished';
   renderCopyResult(r);
+
+  /*
+   * Check the destination itself, rather than trusting the engine's verdict.
+   *
+   * robocopy exits per DIRECTORY, so a run reported "3 of 8 folder(s) FAILED"
+   * and left the user to read a log to find out WHICH files were missing. A
+   * stat of each intended destination answers that in the terms the files were
+   * chosen in, works identically for rsync, and needs no log parsing — robocopy
+   * localises its log, so parsing it breaks on a non-English Windows.
+   *
+   * Skipped on a dry run, where nothing was supposed to land.
+   */
+  if (!dryRun) verifyAfterCopy(rows);
+}
+
+var LAST_FAILURES = [];
+
+async function verifyAfterCopy(rows) {
+  var v = await window.mapper.verifyCopy(rows);
+  var bad = (v.missing || []).concat(v.short || []);
+  LAST_FAILURES = bad;
+  if (!bad.length) {
+    $('copyResult').insertAdjacentHTML('beforeend',
+      '<div class="okline" style="margin-top:6px">Verified: all ' +
+      v.ok.toLocaleString() + ' file(s) are present at the destination with the right size.</div>');
+    return;
+  }
+  var list = bad.slice(0, 12).map(function (x) {
+    return '<div>· ' + esc(x.name) + ' — ' +
+      (x.why ? esc(x.why) : 'size mismatch (' + fmtBytes(x.actual) + ' of ' + fmtBytes(x.size) + ')') +
+      '</div>';
+  }).join('');
+  $('copyResult').insertAdjacentHTML('beforeend',
+    '<div class="warn" style="margin-top:8px"><b>' + bad.length.toLocaleString() +
+    ' file(s) did not land.</b> ' + v.ok.toLocaleString() + ' did.' +
+    '<div style="margin-top:6px">' + list +
+    (bad.length > 12 ? '<div>· …and ' + (bad.length - 12).toLocaleString() + ' more</div>' : '') +
+    '</div>' +
+    '<div style="margin-top:8px">' +
+    '<button class="btn" id="btnFailCsv">Save the list as CSV…</button> ' +
+    '<button class="btn primary" id="btnRetryFailed">Retry these ' + bad.length.toLocaleString() + '</button>' +
+    '</div>' +
+    '<div style="margin-top:6px"><small>A size mismatch counts as not landed: a truncated ' +
+    'file at the destination would make the next comparison call it already copied.</small></div>' +
+    '</div>');
+
+  $('btnFailCsv').addEventListener('click', async function () {
+    var r = await window.mapper.exportFailures(LAST_FAILURES);
+    if (r && r.ok) {
+      $('copyResult').insertAdjacentHTML('beforeend',
+        '<div class="okline" style="margin-top:6px">Written to ' + esc(r.file) + '</div>');
+    }
+  });
+  $('btnRetryFailed').addEventListener('click', function () {
+    // Select exactly the files that did not land, and nothing else.
+    COPY_ROWS.forEach(function (r) {
+      r.selected = LAST_FAILURES.some(function (f) { return f.proposedNas === r.proposedNas; });
+    });
+    renderCopyReview();
+    startCopy(false);
+  });
 }
 
 function renderCopyResult(r) {
@@ -1047,6 +1196,75 @@ function renderCopyResult(r) {
       '<div style="margin-top:6px">Now hit <b>Compare</b> again — everything you just copied ' +
       'should move into <i>Already on NAS</i>. That round trip is the proof it landed.</div>') +
     (r.logFile ? '<div style="margin-top:6px">Log: <code>' + esc(r.logFile) + '</code></div>' : '');
+}
+
+// ── export ──────────────────────────────────────────────────────────────────
+/*
+ * A picker, because there are now two quite different things to export and they
+ * become available at different moments. The old single button was enabled only
+ * after a comparison, went straight to a folder dialog, and — when the main
+ * process refused with "nothing to export yet" — the renderer checked only
+ * `if (r && r.ok)`, so the refusal was swallowed and the click looked like it
+ * had done nothing at all. Every branch here reports its outcome.
+ */
+async function openExport() {
+  var opt = await window.mapper.exportOptions();
+  var rows = [];
+
+  rows.push({
+    id: 'manifest',
+    on: opt.driveFiles > 0,
+    t: 'Drive manifest (CSV)',
+    d: opt.driveFiles > 0
+      ? opt.driveFiles.toLocaleString() + ' files indexed. This is the manifest ' +
+        'format this app reads back — load it under Drive manifest to keep an ' +
+        'inventory between sessions.'
+      : 'Nothing indexed yet. Run Scan only, or Compare.',
+    note: 'No checksums: hashing a Drive for Desktop mount would download every file. ' +
+          'Matching stays on size + name.',
+  });
+
+  rows.push({
+    id: 'reports',
+    on: !!opt.compared,
+    t: 'Comparison reports + copy plan',
+    d: opt.compared
+      ? 'duplicates, new, conflicts, natives, overlap, summary — plus a copy plan that only ever adds files.'
+      : opt.scanned
+        ? 'Needs a comparison. A scan has no destination to compare against, so there are no duplicates or conflicts to report.'
+        : 'Run Compare first.',
+  });
+
+  $('exportList').innerHTML = rows.map(function (r) {
+    return '<button class="exportrow" data-id="' + r.id + '"' + (r.on ? '' : ' disabled') + '>' +
+      '<span class="et">' + esc(r.t) + '</span>' +
+      '<span class="ed">' + esc(r.d) + '</span>' +
+      (r.note && r.on ? '<span class="en">' + esc(r.note) + '</span>' : '') +
+      '</button>';
+  }).join('');
+
+  $('exportList').querySelectorAll('.exportrow').forEach(function (b) {
+    b.addEventListener('click', function () { doExport(b.dataset.id); });
+  });
+  $('exportDlg').showModal();
+}
+
+async function doExport(id) {
+  var r = id === 'manifest'
+    ? await window.mapper.exportManifest()
+    : await window.mapper.exportReports();
+  $('exportDlg').close();
+  if (!r || r.canceled) return;
+  if (!r.ok) {
+    $('main').insertAdjacentHTML('afterbegin',
+      '<div class="warn"><b>Nothing was written.</b> ' + esc(r.error || 'Unknown error') + '</div>');
+    return;
+  }
+  $('main').insertAdjacentHTML('afterbegin', id === 'manifest'
+    ? '<div class="note"><b>Manifest written</b> — ' + r.rows.toLocaleString() +
+      ' rows to ' + esc(r.file) + '</div>'
+    : '<div class="note"><b>Reports written</b> to ' + esc(r.outDir) +
+      ' — including a copy plan that only ever adds files.</div>');
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────
@@ -1121,14 +1339,9 @@ async function init() {
     if (f) { MANIFEST = f; setAccuracy('exact', null); $('accText').textContent = f; }
   });
   $('btnCompare').addEventListener('click', runCompare);
-  $('btnExport').addEventListener('click', async function () {
-    var r = await window.mapper.exportReports();
-    if (r && r.ok) {
-      $('main').insertAdjacentHTML('afterbegin',
-        '<div class="note"><b>Reports written</b> to ' + esc(r.outDir) +
-        ' — including a copy plan that only ever adds files.</div>');
-    }
-  });
+  $('btnExport').addEventListener('click', openExport);
+  $('exportClose').addEventListener('click', function () { $('exportDlg').close(); });
+  $('btnScan').addEventListener('click', runScan);
   $('btnTheme').addEventListener('click', function () {
     var r = document.documentElement, cur = r.getAttribute('data-theme');
     if (!cur) cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';

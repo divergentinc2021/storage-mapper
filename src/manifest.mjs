@@ -79,3 +79,63 @@ export function loadManifest(csvPath) {
 export function emptyManifest() {
   return { byId: new Map(), byMd5: new Map(), bySize: new Map(), count: 0, withMd5: 0 };
 }
+
+// ── writing one ─────────────────────────────────────────────────────────────
+/*
+ * Until now this module could only READ a manifest, and the only CSVs the app
+ * wrote were comparison reports. That gap is what makes someone load new.csv as
+ * a manifest and get "0 usable rows" — the app had no way to produce the thing
+ * it asks for.
+ *
+ * The writer lives next to the reader deliberately. loadManifest counts rows by
+ * `drive_id` (count === byId.size), so a manifest without that column parses to
+ * zero usable rows no matter how much else is in it. A writer sitting in
+ * report.mjs would not have that constraint in front of it, and the first
+ * column rename would produce a file this app rejects as its own input.
+ * test/run.mjs round-trips writeManifest through loadManifest for that reason.
+ */
+const MANIFEST_COLUMNS = ['drive_id', 'name', 'path', 'bytes', 'mime', 'class', 'export_as', 'md5'];
+
+function csvCell(v) {
+  const s = v === undefined || v === null ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/**
+ * A local scan has no Drive file id, but loadManifest needs one to count a row.
+ * The absolute path is already unique per file and is stable across re-scans as
+ * long as nothing moves, which is exactly the property an id needs here.
+ */
+export function localId(abs) {
+  return 'local:' + String(abs).replace(/\\/g, '/');
+}
+
+/**
+ * Serialise scanned files as a manifest this app can read back.
+ *
+ * `md5` is left blank unless the caller supplies one. Checksums are NOT computed
+ * here on purpose: on a Drive for Desktop mount, hashing a file downloads it,
+ * which is the one thing this tool is built to avoid. A manifest without md5 is
+ * honest and still useful — it degrades to size+name, the same as no manifest
+ * at all but with the inventory attached.
+ */
+export function serialiseManifest(files, opts = {}) {
+  const md5For = opts.md5For || (() => '');
+  const lines = [MANIFEST_COLUMNS.join(',')];
+  let rows = 0;
+  for (const f of files) {
+    if (!f || f.error) continue;
+    lines.push([
+      csvCell(f.id || localId(f.abs)),
+      csvCell(f.base),
+      csvCell(f.abs),
+      csvCell(f.size),
+      csvCell(f.mime || ''),
+      csvCell(f.cls || ''),
+      csvCell(f.exportAs || ''),
+      csvCell(md5For(f) || ''),
+    ].join(','));
+    rows++;
+  }
+  return { csv: lines.join('\n') + '\n', rows };
+}

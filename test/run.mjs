@@ -413,5 +413,96 @@ check('rows follow the pairing of their OWN source root', () => {
   assert.deepEqual([r.mapped, r.unmapped], [2, 1]);
 });
 
+// ── manifest round trip ─────────────────────────────────────────────────────
+/*
+ * The trap this guards is specific and has already happened in the field: the
+ * app's own new.csv was loaded as a manifest and every row was discarded,
+ * because loadManifest counts rows by `drive_id` (count === byId.size) and
+ * new.csv has no such column. A generated manifest that the app then rejects as
+ * its own input would be the same bug wearing a friendlier name.
+ */
+const mf = await import('../src/manifest.mjs');
+
+check('a generated manifest loads back with every row usable', () => {
+  const files = [
+    { abs: path.join(DRIVE, 'Proj', 'clip.mp4'), base: 'clip.mp4', size: 1234 },
+    { abs: path.join(DRIVE, 'Proj', 'note, with comma.txt'), base: 'note, with comma.txt', size: 7 },
+    { abs: path.join(DRIVE, 'Proj', 'quote".txt'), base: 'quote".txt', size: 9 },
+  ];
+  const { csv, rows } = mf.serialiseManifest(files);
+  assert.equal(rows, 3);
+  const out = path.join(TMP, 'gen-manifest.csv');
+  writeFileSync(out, csv);
+  const loaded = mf.loadManifest(out);
+  assert.equal(loaded.count, 3, 'every generated row must survive loadManifest');
+  assert.equal(loaded.withMd5, 0, 'no checksums are claimed when none were computed');
+  const rec = loaded.byId.get(mf.localId(files[1].abs));
+  assert.ok(rec, 'a name containing a comma must round-trip');
+  assert.equal(rec.name, 'note, with comma.txt');
+  assert.equal(rec.size, 7);
+});
+
+check('error records are never written to a manifest', () => {
+  const { rows } = mf.serialiseManifest([
+    { error: 'unreadable: X' },
+    { abs: '/a/b.txt', base: 'b.txt', size: 1 },
+  ]);
+  assert.equal(rows, 1);
+});
+
+check('md5 is carried through when the caller supplies one', () => {
+  const files = [{ abs: '/a/b.txt', base: 'b.txt', size: 5 }];
+  const { csv } = mf.serialiseManifest(files, { md5For: () => 'ABCDEF' });
+  const out = path.join(TMP, 'gen-md5.csv');
+  writeFileSync(out, csv);
+  const loaded = mf.loadManifest(out);
+  assert.equal(loaded.withMd5, 1);
+  assert.ok(loaded.byMd5.has('abcdef'), 'md5 is lower-cased on read, so it must match');
+});
+
+// ── destination probe ───────────────────────────────────────────────────────
+/*
+ * Empty and unreachable must not look the same. match() reports every file as
+ * new when the NAS side is empty, and walk() turns an unreadable directory into
+ * an error record that match() drops — so an unmounted share produced a
+ * confident "copy everything" plan. probeRoot is what lets that be refused
+ * while a genuinely empty folder still works.
+ */
+const wk = await import('../src/walk.mjs');
+
+check('probeRoot tells empty apart from missing', () => {
+  const emptyDir = path.join(TMP, 'probe-empty');
+  mkdirSync(emptyDir, { recursive: true });
+  const e = wk.probeRoot(emptyDir);
+  assert.deepEqual([e.exists, e.readable, e.empty], [true, true, true]);
+  assert.equal(e.error, '');
+
+  const gone = wk.probeRoot(path.join(TMP, 'probe-does-not-exist'));
+  assert.equal(gone.exists, false, 'a missing folder must not report as existing');
+  assert.equal(gone.empty, false, 'missing is NOT empty — that conflation is the bug');
+  assert.match(gone.error, /does not exist/);
+
+  const full = wk.probeRoot(NAS);
+  assert.equal(full.empty, false);
+  assert.ok(full.entries > 0);
+});
+
+check('a folder holding only NAS housekeeping counts as empty', () => {
+  const d = path.join(TMP, 'probe-eadir');
+  mkdirSync(path.join(d, '@eaDir'), { recursive: true });
+  writeFileSync(path.join(d, '.DS_Store'), 'x');
+  const p = wk.probeRoot(d);
+  assert.equal(p.empty, true, '@eaDir and .DS_Store are not content');
+});
+
+check('probeRoot reports a file as not-a-folder rather than empty', () => {
+  const f = path.join(TMP, 'probe-file.txt');
+  writeFileSync(f, 'x');
+  const p = wk.probeRoot(f);
+  assert.equal(p.exists, true);
+  assert.equal(p.empty, false);
+  assert.match(p.error, /not a folder/);
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

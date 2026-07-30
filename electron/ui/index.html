@@ -30,7 +30,7 @@
   <button class="btn" id="btnProfMenu" title="Profile actions">⋯</button>
   <button class="btn" id="btnMapTop" disabled title="Run a comparison first">Map…</button>
   <button class="btn primary" id="btnCopyTop" disabled title="Map a destination first">Copy…</button>
-  <button class="btn" id="btnExport" disabled>Export reports…</button>
+  <button class="btn" id="btnExport" disabled>Export…</button>
   <button class="btn" id="btnWhatsNew" title="What's new">?</button>
   <button class="btn" id="btnTheme" title="Toggle theme">◐</button>
 </header>
@@ -59,9 +59,27 @@
     <!-- class, not an inline style: the clash warning recolours this via .hint.bad,
          and an inline colour would outrank the class and silently win. -->
     <div><span id="setupHint" class="hint"></span></div>
-    <button class="btn primary" id="btnCompare" disabled>Compare</button>
+    <!-- Scan is deliberately beside Compare, not hidden behind it. With no NAS
+         folder yet — a new or empty destination — there is nothing to compare
+         against, and requiring a comparison first made the whole app unusable
+         until a destination existed.
+         Both live in ONE grid cell: .pick is a three-column grid, so a second
+         top-level button here wraps Compare onto a line of its own. -->
+    <div class="actions">
+      <button class="btn" id="btnScan" disabled
+              title="Index the Drive side only — no destination needed">Scan only</button>
+      <button class="btn primary" id="btnCompare" disabled>Compare</button>
+    </div>
   </div>
 </section>
+
+<dialog id="exportDlg" class="dlg">
+  <h3>Export</h3>
+  <div id="exportList" class="exportlist"></div>
+  <div class="dlgfoot">
+    <button class="btn" id="exportClose">Close</button>
+  </div>
+</dialog>
 
 <div class="bar" id="bar" hidden>
   <div class="track"><i id="barFill"></i></div>

@@ -75,30 +75,44 @@ ipcMain.handle('save-mapping', async (_e, m) => {
 
 ipcMain.handle('mapping-path', async () => mappingPath());
 
-// ── compare ─────────────────────────────────────────────────────────────────
-ipcMain.handle('compare', async (_e, payload) => new Promise((resolve) => {
-  const child = fork(path.join(__dirname, 'worker.mjs'), [], {
-    // Electron's bundled Node needs this to run a forked script as plain Node.
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+// ── compare / scan ──────────────────────────────────────────────────────────
+/*
+ * One driver for both. A scan is the same walk with the NAS half and the
+ * matching left out, so giving it a second fork/IPC/error path would mean two
+ * places to keep the crash and exit-code handling correct.
+ */
+function runWorker(cmd, payload, label) {
+  return new Promise((resolve) => {
+    const child = fork(path.join(__dirname, 'worker.mjs'), [], {
+      // Electron's bundled Node needs this to run a forked script as plain Node.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let settled = false;
+    child.on('message', (m) => {
+      if (m.type === 'progress') { if (win) win.webContents.send('progress', m); return; }
+      settled = true;
+      if (m.type === 'done') {
+        lastRun = {
+          result: m.result, overlap: m.overlap, nasIndex: m.nasIndex,
+          driveRoot: (payload.driveRoots || [])[0] || '',
+          driveFiles: m.driveFiles || [],
+          scanned: !!m.scanned,
+        };
+      }
+      resolve(m);
+      child.kill();
+    });
+    child.on('error', (e) => { if (!settled) resolve({ type: 'error', message: e.message }); });
+    child.on('exit', (code) => {
+      if (!settled) resolve({ type: 'error', message: `${label} exited with code ${code}` });
+    });
+    child.send({ cmd, ...payload });
   });
-  let settled = false;
-  child.on('message', (m) => {
-    if (m.type === 'progress') { if (win) win.webContents.send('progress', m); return; }
-    settled = true;
-    if (m.type === 'done') {
-      lastRun = { result: m.result, overlap: m.overlap, nasIndex: m.nasIndex,
-                  driveRoot: (payload.driveRoots || [])[0] || '' };
-    }
-    resolve(m);
-    child.kill();
-  });
-  child.on('error', (e) => { if (!settled) resolve({ type: 'error', message: e.message }); });
-  child.on('exit', (code) => {
-    if (!settled) resolve({ type: 'error', message: `comparison exited with code ${code}` });
-  });
-  child.send({ cmd: 'compare', ...payload });
-}));
+}
+
+ipcMain.handle('compare', async (_e, payload) => runWorker('compare', payload, 'comparison'));
+ipcMain.handle('scan', async (_e, payload) => runWorker('scan', payload, 'scan'));
 
 /** Search the NAS index from the last run — used by "find the match myself". */
 ipcMain.handle('search-nas', async (_e, { query, size }) => {
@@ -127,6 +141,92 @@ ipcMain.handle('export-reports', async () => {
   const summary = writeAll(outDir, lastRun.result, lastRun.overlap);
   writeCopyPlan(outDir, lastRun.result, lastRun.driveRoot || '');
   return { ok: true, outDir, summary };
+});
+
+/**
+ * What is available to export right now, so the picker offers only real options
+ * instead of a single button that fails with a message nobody sees.
+ */
+ipcMain.handle('export-options', async () => ({
+  hasRun: !!lastRun,
+  scanned: !!(lastRun && lastRun.scanned),
+  driveFiles: lastRun ? (lastRun.driveFiles || []).length : 0,
+  newRows: lastRun ? (lastRun.result.new || []).length : 0,
+  compared: !!(lastRun && !lastRun.scanned),
+}));
+
+/*
+ * A drive manifest, from whichever walk last happened — scan or comparison.
+ *
+ * This is the file the app has always ASKED for and never been able to produce,
+ * which is how someone ends up feeding it new.csv and getting "0 usable rows".
+ * It is written through serialiseManifest, which sits beside loadManifest so the
+ * columns cannot drift apart.
+ */
+ipcMain.handle('export-manifest', async () => {
+  if (!lastRun || !(lastRun.driveFiles || []).length) {
+    return { ok: false, error: 'Nothing has been scanned yet. Run Scan or Compare first.' };
+  }
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Save drive manifest',
+    defaultPath: path.join(app.getPath('documents'), 'drive-manifest.csv'),
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  const { serialiseManifest } = await import('../src/manifest.mjs');
+  const { csv, rows } = serialiseManifest(lastRun.driveFiles);
+  fs.writeFileSync(r.filePath, csv, 'utf8');
+  return { ok: true, file: r.filePath, rows };
+});
+
+/*
+ * Did the files actually land?
+ *
+ * robocopy reports per-DIRECTORY exit codes, so a failed run told you "3 of 8
+ * folders FAILED" and left you to read a log to find out which files. Statting
+ * the intended destinations answers it directly, in the same terms the user
+ * chose them in, and works the same for rsync — no locale-dependent log parsing.
+ *
+ * A size mismatch counts as not-landed: a truncated file is worse than a missing
+ * one, because the next comparison sees a file at the destination and stops
+ * calling it new.
+ */
+ipcMain.handle('verify-copy', async (_e, rows) => {
+  const missing = [], short = [], ok = [];
+  for (const row of rows || []) {
+    const dest = row && row.proposedNas;
+    if (!dest) continue;
+    try {
+      const st = fs.statSync(dest);
+      const want = Number(row.size);
+      if (Number.isFinite(want) && want > 0 && st.size !== want) {
+        short.push({ ...row, actual: st.size });
+      } else ok.push(row);
+    } catch (e) {
+      missing.push({ ...row, why: e.code || e.message });
+    }
+  }
+  return { ok: ok.length, missing, short };
+});
+
+/** Write the not-landed list somewhere the user can act on it. */
+ipcMain.handle('export-failures', async (_e, rows) => {
+  if (!rows || !rows.length) return { ok: false, error: 'nothing to export' };
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Save the list of files that did not copy',
+    defaultPath: path.join(app.getPath('documents'), 'did-not-copy.csv'),
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  const cell = (v) => {
+    const s = v === undefined || v === null ? '' : String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const head = 'name,drivePath,proposedNas,bytes,actualBytes,reason';
+  const body = rows.map((x) => [x.name, x.drivePath, x.proposedNas, x.size,
+    x.actual === undefined ? '' : x.actual, x.why || 'size mismatch'].map(cell).join(','));
+  fs.writeFileSync(r.filePath, [head, ...body].join('\n') + '\n', 'utf8');
+  return { ok: true, file: r.filePath, rows: rows.length };
 });
 
 // ── profiles ────────────────────────────────────────────────────────────────

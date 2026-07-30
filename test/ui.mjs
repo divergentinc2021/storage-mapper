@@ -50,7 +50,13 @@ const win = {
     profilesSave: noop, profilesLoad: noop, profilesDelete: noop, profilesSetDefault: noop,
     profilesExport: noop, profilesImport: noop, profilesSetShared: noop, profilesSharedApplied: noop,
     saveMapping: noop, exportReports: noop, revealInFolder: noop, copyRun: noop, copyCancel: noop,
+    // Set per-test; a scan or compare returns whatever this yields.
+    scan: () => Promise.resolve(win.__scanResult),
+    exportOptions: () => Promise.resolve({ hasRun: false, scanned: false, driveFiles: 0, newRows: 0, compared: false }),
+    exportManifest: noop, verifyCopy: () => Promise.resolve({ ok: 0, missing: [], short: [] }),
+    exportFailures: noop, inspectDest: () => Promise.resolve({}),
   },
+  __scanResult: null,
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   prompt: () => null, confirm: () => false,
 };
@@ -61,7 +67,9 @@ const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(
   get MAPPED(){return MAPPED}, set MAPPED(v){MAPPED=v},
   get DRIVE_ROOTS(){return DRIVE_ROOTS}, set DRIVE_ROOTS(v){DRIVE_ROOTS=v},
   get NAS_ROOTS(){return NAS_ROOTS}, set NAS_ROOTS(v){NAS_ROOTS=v},
-  get SEP(){return SEP}, set SEP(v){SEP=v} };`);
+  get SEP(){return SEP}, set SEP(v){SEP=v},
+  get SCANNED(){return SCANNED}, set SCANNED(v){SCANNED=v},
+  runScan, runCompare };`);
 const api = fn(...Object.values(sandbox));
 
 let failures = 0;
@@ -135,7 +143,8 @@ check('before any comparison both Map and Copy are disabled', () => {
   api.syncStageButtons();
   assert.equal(mapBtn.disabled, true);
   assert.equal(copyBtn.disabled, true);
-  assert.match(mapBtn.title, /Run a comparison first/);
+  // Scan is now a way in as well, so the prompt must name both.
+  assert.match(mapBtn.title, /Scan only, or Compare/);
 });
 
 check('after a comparison Map lights up but Copy stays LOCKED', () => {
@@ -293,6 +302,59 @@ check('export defaults to rules only — local paths are not leaked', () => {
 });
 
 _rm(userData, { recursive: true, force: true });
+
+// ── scan without compare ────────────────────────────────────────────────────
+console.log('\nscan without compare\n');
+
+const acheck = async (name, f) => {
+  try { await f(); console.log(`  ok   ${name}`); }
+  catch (e) { failures++; console.log(`  FAIL ${name}\n       ${e.message}`); }
+};
+
+await acheck('Scan needs only a Drive folder; Compare still needs both', () => {
+  api.DRIVE_ROOTS = ['H:/SD/Projects']; api.NAS_ROOTS = [];
+  api.renderPaths();
+  assert.equal(doc.getElementById('btnScan').disabled, false,
+    'a source alone must be enough to scan — that is the empty-destination case');
+  assert.equal(doc.getElementById('btnCompare').disabled, true,
+    'Compare still needs something to compare against');
+  assert.match(doc.getElementById('setupHint').textContent, /No NAS folder yet/);
+});
+
+await acheck('a scan lights Map without any comparison', async () => {
+  api.RESULT = null; api.MAPPED = null; api.SCANNED = false;
+  doc.getElementById('btnExport').disabled = true;
+  win.__scanResult = {
+    type: 'done', scanned: true,
+    result: { duplicates: [], conflicts: [], natives: [], errors: [], new: [
+      { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: '' },
+      { drivePath: 'a/y.mp4', name: 'y.mp4', size: 20, driveRoot: 'H:/d', proposedNas: '' },
+    ], stats: {} },
+    droppedRoots: [], nasProbes: [], driveProbes: [],
+  };
+  await api.runScan();
+  assert.equal(api.SCANNED, true);
+  assert.equal(mapBtn.disabled, false, 'Map must open after a scan alone');
+  assert.match(mapBtn.textContent, /Map 2 new/);
+  assert.equal(doc.getElementById('btnExport').disabled, false,
+    'a scan must make the manifest exportable');
+  assert.equal(copyBtn.disabled, true, 'Copy still waits for a mapped destination');
+});
+
+await acheck('a FAILED compare clears the stage instead of leaving the last run lit', async () => {
+  // Land a good scan first so there is something stale to leak.
+  await api.runScan();
+  assert.equal(doc.getElementById('btnExport').disabled, false);
+
+  win.mapper.compare = () => Promise.resolve({ type: 'error', message: 'NAS folders cannot be read' });
+  await api.runCompare();
+
+  assert.equal(api.RESULT, null, 'the previous result must not survive a failed compare');
+  assert.equal(doc.getElementById('btnExport').disabled, true,
+    'Export stayed lit after a failure and silently wrote the PREVIOUS run');
+  assert.equal(mapBtn.disabled, true, 'Map must not offer rows with no run behind them');
+  assert.equal(copyBtn.disabled, true);
+});
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);
