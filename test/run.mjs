@@ -568,5 +568,46 @@ check('volumeRootOf handles drive letters, UNC and /Volumes', () => {
   assert.equal(wk.volumeRootOf('/home/x/Shared drives/y'), '/');
 });
 
+// ── Google Vids ─────────────────────────────────────────────────────────────
+/*
+ * Found by a real copy, not by reading docs: six .gvid files failed with
+ * "Incorrect function" (ERROR_INVALID_FUNCTION), which is Drive for Desktop's
+ * answer when asked for the bytes of a file that has none. They were 174 bytes
+ * on disk and classified as ordinary binaries, so the app kept offering to copy
+ * something that can never be copied.
+ */
+const nat = await import('../src/natives.mjs');
+
+check('.gvid is a Google-native stub, never an ordinary file to copy', () => {
+  assert.equal(nat.isNativeExt('.gvid'), true);
+  assert.equal(nat.isNativeExt('.GVID'), true, 'extensions arrive in any case');
+  const c = nat.classifyNative('.gvid', path.join(TMP, 'nope.gvid'), 174);
+  assert.equal(c.kind, 'Google Vids');
+  assert.equal(c.exportAs, null, 'no Drive API export format is claimed for Vids');
+  assert.match(c.note, /Download → MP4/);
+});
+
+check('an unreadable stub still classifies rather than throwing', () => {
+  // readStubDocId cannot read a .gvid at all — it must return null, not throw,
+  // or one unreadable stub would abort the whole walk.
+  assert.equal(nat.readStubDocId(path.join(TMP, 'does-not-exist.gvid'), 174), null);
+});
+
+check('every Google extension in the table is classified', () => {
+  for (const ext of Object.keys(nat.NATIVE_KINDS)) {
+    assert.equal(nat.isNativeExt(ext), true, `${ext} must be recognised`);
+    const c = nat.classifyNative(ext, path.join(TMP, 'x' + ext), 174);
+    assert.ok(c && c.kind && c.note, `${ext} must produce a kind and a note`);
+  }
+});
+
+check('a real video file is NOT swept up as a native', () => {
+  assert.equal(nat.isNativeExt('.mp4'), false);
+  assert.equal(nat.isNativeExt('.mov'), false);
+  // .gif and .gz start with "g" — a pattern-based guess would have caught them.
+  assert.equal(nat.isNativeExt('.gif'), false, 'a .gif is a real file with real bytes');
+  assert.equal(nat.isNativeExt('.gz'), false);
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

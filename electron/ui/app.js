@@ -1137,21 +1137,43 @@ async function verifyAfterCopy(rows) {
   }
   var list = bad.slice(0, 12).map(function (x) {
     return '<div>· ' + esc(x.name) + ' — ' +
-      (x.why ? esc(x.why) : 'size mismatch (' + fmtBytes(x.actual) + ' of ' + fmtBytes(x.size) + ')') +
+      (x.diagnosis ? esc(x.diagnosis)
+        : x.why ? esc(x.why)
+        : 'size mismatch (' + fmtBytes(x.actual) + ' of ' + fmtBytes(x.size) + ')') +
       '</div>';
   }).join('');
+
+  /*
+   * Retry only what retrying can fix. A Google-native stub has no bytes behind
+   * it, so a second attempt fails identically — offering "Retry these 6" for six
+   * stubs sends the user round a loop that cannot terminate, which is what
+   * happened on the first run of this feature.
+   */
+  var retryable = bad.filter(function (x) {
+    return !(x.diagnosis && x.diagnosis.indexOf('Google-native stub') !== -1);
+  });
+  var stubs = bad.length - retryable.length;
+
   $('copyResult').insertAdjacentHTML('beforeend',
     '<div class="warn" style="margin-top:8px"><b>' + bad.length.toLocaleString() +
     ' file(s) did not land.</b> ' + v.ok.toLocaleString() + ' did.' +
+    (stubs ? ' <b>' + stubs.toLocaleString() + '</b> of them are Google-native files with no ' +
+             'contents to copy — those will never transfer and are not a fault of this run.' : '') +
     '<div style="margin-top:6px">' + list +
     (bad.length > 12 ? '<div>· …and ' + (bad.length - 12).toLocaleString() + ' more</div>' : '') +
     '</div>' +
     '<div style="margin-top:8px">' +
-    '<button class="btn" id="btnFailCsv">Save the list as CSV…</button> ' +
-    '<button class="btn primary" id="btnRetryFailed">Retry these ' + bad.length.toLocaleString() + '</button>' +
+    '<button class="btn" id="btnFailCsv">Save the list as CSV…</button>' +
+    (retryable.length
+      ? ' <button class="btn primary" id="btnRetryFailed">Retry these ' +
+        retryable.length.toLocaleString() + '</button>'
+      : '') +
     '</div>' +
-    '<div style="margin-top:6px"><small>A size mismatch counts as not landed: a truncated ' +
-    'file at the destination would make the next comparison call it already copied.</small></div>' +
+    (stubs && !retryable.length
+      ? '<div style="margin-top:6px"><small>Nothing here is retryable. Run Compare again ' +
+        'and these will be listed under <i>Native stubs</i> instead of <i>New</i>.</small></div>'
+      : '<div style="margin-top:6px"><small>A size mismatch counts as not landed: a truncated ' +
+        'file at the destination would make the next comparison call it already copied.</small></div>') +
     '</div>');
 
   $('btnFailCsv').addEventListener('click', async function () {
@@ -1161,14 +1183,16 @@ async function verifyAfterCopy(rows) {
         '<div class="okline" style="margin-top:6px">Written to ' + esc(r.file) + '</div>');
     }
   });
-  $('btnRetryFailed').addEventListener('click', function () {
-    // Select exactly the files that did not land, and nothing else.
-    COPY_ROWS.forEach(function (r) {
-      r.selected = LAST_FAILURES.some(function (f) { return f.proposedNas === r.proposedNas; });
+  if (retryable.length) {
+    $('btnRetryFailed').addEventListener('click', function () {
+      // Select exactly the files a retry can actually help, and nothing else.
+      COPY_ROWS.forEach(function (r) {
+        r.selected = retryable.some(function (f) { return f.proposedNas === r.proposedNas; });
+      });
+      renderCopyReview();
+      startCopy(false);
     });
-    renderCopyReview();
-    startCopy(false);
-  });
+  }
 }
 
 function renderCopyResult(r) {

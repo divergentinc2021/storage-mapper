@@ -26,6 +26,19 @@ export const NATIVE_KINDS = {
   '.gmap':    { kind: 'Google My Maps',    exportAs: null   },
   '.gtable':  { kind: 'Google Tables',     exportAs: null   },
   '.glink':   { kind: 'Drive shortcut',    exportAs: null   },
+  /*
+   * Google Vids. Missing from this table until a real copy tried to move six of
+   * them to a NAS and robocopy failed every one with "Incorrect function" —
+   * ERROR_INVALID_FUNCTION, which is what Drive for Desktop returns when asked
+   * for the bytes of a file that has none. They are 174 bytes on disk and cannot
+   * even be read, so unlike a .gdoc stub there is no doc id to recover.
+   *
+   * The note is spelled out rather than generated: Vids exports as MP4 from its
+   * own editor, and claiming a Drive API export format here would send someone
+   * after a path this tool has not verified exists.
+   */
+  '.gvid':    { kind: 'Google Vids',       exportAs: null,
+                note: 'no file to copy — open it in Google Vids and use Download → MP4 if you need an archive copy' },
 };
 
 /** Stubs are tiny. Anything larger is a real file that merely shares the name. */
@@ -64,8 +77,8 @@ export function classifyNative(ext, absPath, size) {
     kind: spec.kind,
     exportAs: spec.exportAs,
     docId: readStubDocId(absPath, size),
-    note: spec.exportAs
+    note: spec.note || (spec.exportAs
       ? `export via Drive API as .${spec.exportAs} — copying the stub archives a dead link`
-      : 'no export path exists; this must stay in Google Drive',
+      : 'no export path exists; this must stay in Google Drive'),
   };
 }

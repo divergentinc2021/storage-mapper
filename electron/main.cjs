@@ -191,6 +191,63 @@ ipcMain.handle('export-manifest', async () => {
  * one, because the next comparison sees a file at the destination and stops
  * calling it new.
  */
+/*
+ * Why a file did not land, when the source explains it.
+ *
+ * Google-native files are stubs with no retrievable bytes: Drive for Desktop
+ * answers a read with ERROR_INVALID_FUNCTION ("Incorrect function"), robocopy
+ * retries, gives up, and the file simply never appears. Six .gvid files failed
+ * exactly this way, and the extension table did not know about Google Vids yet.
+ *
+ * Probing the source here catches the NEXT Google file type without anyone
+ * having to guess extensions in advance — the table is the fast path, this is
+ * the backstop.
+ *
+ * Bounded by size on purpose. Reading a file on a Stream-mode mount DOWNLOADS
+ * it, so this only ever touches things small enough to be a stub; a 12 GB video
+ * that failed for some other reason is never opened.
+ */
+const STUB_PROBE_MAX = 16 * 1024;
+
+function diagnoseSource(row) {
+  const src = row.driveAbs ||
+    (row.driveRoot && row.drivePath
+      ? path.join(row.driveRoot, String(row.drivePath).split('/').join(path.sep))
+      : null);
+  if (!src) return null;
+  const size = Number(row.size);
+  if (!Number.isFinite(size) || size > STUB_PROBE_MAX) return null;
+
+  /*
+   * Stat first, so a genuine directory is not mistaken for the stub signature.
+   *
+   * Windows reports a contentless Drive file as ERROR_INVALID_FUNCTION, and
+   * libuv translates that to EISDIR — the same code a real directory produces.
+   * Assuming EINVAL here (which is what "Incorrect function" reads like) was
+   * wrong and the test caught it. A regular file that answers a read with
+   * EISDIR is not a directory; it is Drive saying there are no bytes.
+   */
+  let st;
+  try {
+    st = fs.statSync(src);
+  } catch (e) {
+    return `the source is no longer there (${e.code || e.message})`;
+  }
+  if (st.isDirectory()) return 'the source is a folder, not a file';
+
+  try {
+    fs.readFileSync(src);
+    return null;   // readable: the failure was something else
+  } catch (e) {
+    const code = e.code || '';
+    if (code === 'EISDIR' || code === 'EINVAL' || /incorrect function/i.test(e.message || '')) {
+      return 'the source has no file contents — it is a Google-native stub, ' +
+             'so there is nothing to copy and retrying cannot help';
+    }
+    return `the source could not be read (${code || e.message})`;
+  }
+}
+
 ipcMain.handle('verify-copy', async (_e, rows) => {
   const missing = [], short = [], ok = [];
   for (const row of rows || []) {
@@ -203,10 +260,11 @@ ipcMain.handle('verify-copy', async (_e, rows) => {
         short.push({ ...row, actual: st.size });
       } else ok.push(row);
     } catch (e) {
-      missing.push({ ...row, why: e.code || e.message });
+      missing.push({ ...row, why: e.code || e.message, diagnosis: diagnoseSource(row) });
     }
   }
-  return { ok: ok.length, missing, short };
+  const unfixable = missing.filter((m) => m.diagnosis && /Google-native stub/.test(m.diagnosis));
+  return { ok: ok.length, missing, short, unfixable: unfixable.length };
 });
 
 /** Write the not-landed list somewhere the user can act on it. */
