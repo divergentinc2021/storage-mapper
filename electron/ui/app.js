@@ -1142,23 +1142,31 @@ function syncStageButtons() {
     : 'Nothing new — everything is already on the NAS';
 
   /*
-   * Still gated on MAPPED, deliberately. Rows can arrive with a destination
-   * already filled in from a mapping rule, but Map is where those destinations
-   * are actually looked at and confirmed — going straight to Copy would act on
-   * paths nobody has agreed to.
+   * No longer gated on having been through Map.
+   *
+   * The gate assumed a destination was unreviewed until Map confirmed it, but a
+   * row that arrived with one from a mapping rule is not less examined than one
+   * Map derived the same way — and the real review happens after this button,
+   * not before it: Copy opens a dialog listing every file with its destination
+   * and a checkbox, and nothing moves until that is confirmed. The gate only
+   * ever blocked the case where the rules already had the answer, which is the
+   * common one once a profile is set up.
+   *
+   * Copy still needs an ABSOLUTE destination. That is a correctness rule, not a
+   * ceremony, and it stays.
    */
-  var ready = MAPPED
-    ? MAPPED.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); })
-    : [];
+  var ready = copyReadyRows();
   copyBtn.disabled = !ready.length;
   copyBtn.textContent = ready.length ? 'Copy ' + ready.length.toLocaleString() + '…' : 'Copy…';
   copyBtn.title = ready.length ? 'Review and copy'
-    : count ? 'Check the destinations in Map first'
+    : count ? 'These have no destination yet — set one in Map'
     : 'Nothing to copy';
 }
 
 function openMap() {
-  if (!RESULT || !RESULT.new.length) return;
+  // actionableRows, not RESULT.new — the button is enabled from the same list,
+  // and gating the dialog on a narrower one made it light up and do nothing.
+  if (!actionableRows().length) return;
   MAP_PAIRS = suggestPairs(DRIVE_ROOTS, NAS_ROOTS);
   renderMap();
   $('mapDlg').showModal();
@@ -1205,18 +1213,22 @@ function suggestPairs(drives, nas) {
 }
 
 function rowsForSource(root) {
-  return RESULT.new.filter(function (r) { return normPath(r.driveRoot) === normPath(root); });
+  // Matches applyMap: a converted file belongs to the source its STUB came
+  // from, not to the converted folder it happens to sit in.
+  return actionableRows().filter(function (r) {
+    return normPath(r.viaConversion ? r.stubRoot : r.driveRoot) === normPath(root);
+  });
 }
 
 function renderMap() {
-  var total = RESULT.new.length;
+  var total = actionableRows().length;
   var unset = MAP_PAIRS.filter(function (p) { return !p.nas; });
   var mappedFiles = MAP_PAIRS.reduce(function (a, p) {
     return a + (p.nas ? rowsForSource(p.drive).length : 0);
   }, 0);
 
   $('mapHint').innerHTML =
-    '<b>' + mappedFiles.toLocaleString() + ' of ' + total.toLocaleString() + '</b> new file(s) have a destination. ' +
+    '<b>' + mappedFiles.toLocaleString() + ' of ' + total.toLocaleString() + '</b> file(s) have a destination. ' +
     'Every source is mapped separately — check each arrow before continuing.';
 
   $('mapNote').innerHTML = unset.length
@@ -1233,7 +1245,7 @@ function renderMap() {
       return '<div class="pairrow' + (p.nas ? '' : ' unset') + '">' +
         '<span class="side"><b>' + esc(baseName(p.drive)) + '</b>' +
           '<small>' + esc(p.drive) + '</small>' +
-          '<small>' + mine.length.toLocaleString() + ' new file(s) · ' + fmtBytes(bytes) + '</small></span>' +
+          '<small>' + mine.length.toLocaleString() + ' file(s) · ' + fmtBytes(bytes) + '</small></span>' +
         '<span class="arrow">→</span>' +
         '<span class="side to"><b>' + (p.nas ? esc(baseName(p.nas)) : 'not set') + '</b>' +
           '<small>' + (p.nas ? esc(p.nas) : 'these files will be skipped') + '</small></span>' +
@@ -1262,19 +1274,40 @@ function applyMap() {
 
   // Each row follows the pairing of ITS OWN source root. A shared destination
   // would merge separate project trees into one folder.
-  MAPPED = RESULT.new.map(function (r) {
-    var nas = byRoot[normPath(r.driveRoot)];
+  MAPPED = actionableRows().map(function (r) {
+    /*
+     * A converted file is mapped by where its STUB lived, not by where the
+     * converted file itself sits. The converted tree is a single folder holding
+     * output from every project and is never one of the sources being paired,
+     * so keying on its root dropped every converted row as "source not mapped"
+     * — the whole point of pointing at the folder, silently undone.
+     */
+    var srcRoot = r.viaConversion ? r.stubRoot : r.driveRoot;
+    var srcPath = r.viaConversion ? r.stubPath : r.drivePath;
+    var nas = byRoot[normPath(srcRoot)];
     if (!nas) return Object.assign({}, r, { proposedNas: '', mappedBy: '(source not mapped)' });
+
+    var dest = joinDest(nas, srcPath);
+    // Keep the stub's folder, take the converted file's name: Plan.gdoc's
+    // destination becomes Plan.docx in the same place.
+    if (r.viaConversion) dest = withFileName(dest, r.name);
+    // An elected conflict keeps whichever mode was chosen for it.
+    if (r.conflictMode === 'alongside') dest = alongsideName(dest);
+
     return Object.assign({}, r, {
-      proposedNas: joinDest(nas, r.drivePath),
-      mappedBy: baseName(r.driveRoot) + ' → ' + baseName(nas),
+      proposedNas: dest,
+      mappedBy: baseName(srcRoot) + ' → ' + baseName(nas) +
+        (r.viaConversion ? ' (converted)' : '') +
+        (r.conflictMode ? ' (' + r.conflictMode + ')' : ''),
     });
   });
 
   var ok = MAPPED.filter(function (r) { return r.proposedNas; }).length;
   var skipped = MAPPED.length - ok;
   $('mapDlg').close();
-  RESULT.new = MAPPED;      // so the New tab and the exported plan agree
+  // Only the new rows go back to RESULT.new. Elected conflicts stay conflicts —
+  // folding them in would double-count them and lose the choice attached to them.
+  RESULT.new = MAPPED.filter(function (r) { return !r.conflictMode; });
   syncStageButtons();
   renderTab();
   $('main').insertAdjacentHTML('afterbegin',
@@ -1322,6 +1355,13 @@ function electedConflictRows() {
         conflictMode: mode,
       });
     });
+}
+
+/** Swap the last path segment for `name`, keeping the folders. */
+function withFileName(p, name) {
+  var s = String(p);
+  var cut = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return cut >= 0 ? s.slice(0, cut + 1) + name : name;
 }
 
 /** `Report.docx` -> `Report (from Drive).docx`, extension preserved. */

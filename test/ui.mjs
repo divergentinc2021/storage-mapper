@@ -67,7 +67,9 @@ const sandbox = { document: doc, window: win, console, setTimeout, Set, JSON, Ma
 const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(){return RESULT}, set RESULT(v){RESULT=v},
   syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest, applyDestVerdicts,
   clashingRoots, renderPaths, verifyDuplicates, destForDrivePath,
-  actionableRows, electedConflictRows, alongsideName,
+  actionableRows, electedConflictRows, alongsideName, withFileName,
+  rowsForSource, applyMap, openMap,
+  get MAP_PAIRS(){return MAP_PAIRS}, set MAP_PAIRS(v){MAP_PAIRS=v},
   get MAPPING(){return MAPPING}, set MAPPING(v){MAPPING=v},
   get CONFLICT_PICKS(){return CONFLICT_PICKS}, set CONFLICT_PICKS(v){CONFLICT_PICKS=v},
   get CONV_ROOTS(){return CONV_ROOTS}, set CONV_ROOTS(v){CONV_ROOTS=v},
@@ -156,22 +158,24 @@ check('before any comparison both Map and Copy are disabled', () => {
   assert.match(mapBtn.title, /Scan only, or Compare/);
 });
 
-check('after a comparison Map lights up but Copy stays LOCKED', () => {
-  // The destinations here are deliberately ALREADY ABSOLUTE. An earlier version
-  // of this test used empty ones, so Copy was disabled for the wrong reason and
-  // the test passed even when the Map gate was removed entirely. The gate is
-  // "MAPPED is null", not "there is nothing copyable".
+check('rows that already have an absolute destination are copyable without Map', () => {
+  /*
+   * Copy used to be locked until Map had run, even when every row already had
+   * an absolute destination from a mapping rule. Removed deliberately: the
+   * review that matters is the copy dialog, which lists every file and its
+   * destination and moves nothing until it is confirmed.
+   */
+  api.CONFLICT_PICKS = {};
   api.RESULT = { new: [
     { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/Amanzi/a/x.mp4' },
     { drivePath: 'a/y.mp4', name: 'y.mp4', size: 20, driveRoot: 'H:/d', proposedNas: 'Z:/Amanzi/a/y.mp4' },
   ] };
   api.MAPPED = null;
   api.syncStageButtons();
-  assert.equal(mapBtn.disabled, false, 'Map should be available once there are new files');
+  assert.equal(mapBtn.disabled, false, 'Map is still available to change the destinations');
   assert.match(mapBtn.textContent, /Map 2 new/);
-  assert.equal(copyBtn.disabled, true, 'Copy must stay locked until a destination is mapped');
-  // Wording is free to change; what it must do is send the user to Map.
-  assert.match(copyBtn.title, /\bMap\b/);
+  assert.equal(copyBtn.disabled, false, 'but Copy no longer waits for it');
+  assert.match(copyBtn.textContent, /Copy 2/);
 });
 
 check('once mapped, Copy lights up with the count', () => {
@@ -543,11 +547,10 @@ check('an updated file is copyable even though nothing is new', () => {
   assert.match(doc.getElementById('btnMapTop').textContent, /Map 1 file…/,
     'and it must not call an elected conflict "new"');
 
-  // Copy stays behind Map, as it does for new files — see the gate test above.
-  assert.equal(doc.getElementById('btnCopyTop').disabled, true);
-  api.MAPPED = api.actionableRows();
-  api.syncStageButtons();
-  assert.equal(doc.getElementById('btnCopyTop').disabled, false, 'and unlocks once mapped');
+  // Its destination is already absolute, so Copy is available too — Map is
+  // there to CHANGE that destination, not to unlock the button.
+  assert.equal(doc.getElementById('btnCopyTop').disabled, false);
+  assert.match(doc.getElementById('btnCopyTop').textContent, /Copy 1/);
 });
 
 check('copy alongside never targets the NAS file it conflicts with', () => {
@@ -601,6 +604,73 @@ check('unconverted stubs are named as waiting work, not a dead end', () => {
   api.syncStageButtons();
   assert.match(doc.getElementById('btnMapTop').title, /2 Google stub/,
     'the tooltip has to point at the stubs rather than claim there is nothing to do');
+});
+
+/*
+ * Reported as "map is not working since I have specified the converted files".
+ *
+ * A converted row's driveRoot is the CONVERTED folder, which is never one of
+ * the sources being paired — so Map found no destination for any of them and
+ * dropped the lot as "source not mapped". Silently, and precisely for the files
+ * pointing at the converted folder was supposed to rescue.
+ */
+check('a converted file is mapped by where its STUB lived', () => {
+  api.CONFLICT_PICKS = {};
+  api.SEP = '/';
+  api.RESULT = {
+    duplicates: [], conflicts: [], natives: [], errors: [], stats: {},
+    new: [
+      // an ordinary new file from a mapped source
+      { drivePath: 'JIGSPACE/clip.mp4', name: 'clip.mp4', size: 10,
+        driveRoot: 'H:/Shared drives/UIH - JIGSPACE', proposedNas: '' },
+      // a converted stub: it LIVES in the converted folder, but belongs to JIGSPACE
+      { drivePath: 'JIGSPACE/Plan.docx', name: 'Plan.docx', size: 20,
+        driveRoot: 'H:/My Drive/_Converted for NAS',
+        driveAbs: 'H:/My Drive/_Converted for NAS/JIGSPACE/Plan.docx',
+        viaConversion: true, stubPath: 'JIGSPACE/Plan.gdoc',
+        stubRoot: 'H:/Shared drives/UIH - JIGSPACE', proposedNas: '' },
+    ],
+  };
+  api.MAPPED = null;
+
+  // Both rows must be attributed to the JIGSPACE source, not two different ones.
+  assert.equal(api.rowsForSource('H:/Shared drives/UIH - JIGSPACE').length, 2,
+    'the converted row must count against the source its stub came from');
+  assert.equal(api.rowsForSource('H:/My Drive/_Converted for NAS').length, 0,
+    'and not against the converted folder');
+
+  api.MAP_PAIRS = [{ drive: 'H:/Shared drives/UIH - JIGSPACE', nas: 'Z:/SHARED DRIVES/JIGSPACE' }];
+  api.applyMap();
+
+  const byName = {};
+  api.MAPPED.forEach((r) => { byName[r.name] = r; });
+  assert.equal(byName['clip.mp4'].proposedNas, 'Z:/SHARED DRIVES/JIGSPACE/JIGSPACE/clip.mp4');
+  assert.ok(byName['Plan.docx'].proposedNas, 'the converted file must GET a destination');
+  assert.ok(!/_Converted for NAS/.test(byName['Plan.docx'].proposedNas),
+    'and it must not land in a mirror of the converted folder');
+  assert.equal(byName['Plan.docx'].proposedNas, 'Z:/SHARED DRIVES/JIGSPACE/JIGSPACE/Plan.docx',
+    'it keeps the stub folder and takes the converted file name');
+  assert.equal(api.MAPPED.filter((r) => !r.proposedNas).length, 0, 'nothing dropped');
+});
+
+check('Map opens for work that is not in the new list', () => {
+  api.CONFLICT_PICKS = {};
+  api.RESULT = {
+    duplicates: [], new: [], natives: [], errors: [], stats: {},
+    conflicts: [{ drivePath: 'P/R.docx', nasPath: 'Z:/n/P/R.docx', name: 'R.docx',
+                  driveSize: 5, nasSize: 4, size: 5, reason: 'same name, different size',
+                  driveRoot: 'H:/d', driveAbs: 'H:/d/P/R.docx',
+                  proposedNas: 'Z:/n/P/R.docx', mappedBy: 'mirror' }],
+  };
+  api.MAPPED = null;
+  api.CONFLICT_PICKS = { 'P/R.docx': 'alongside' };
+  // The button is lit from actionableRows, so the dialog must open from the
+  // same list or it lights up and does nothing.
+  let shown = 0;
+  const dlg = doc.getElementById('mapDlg');
+  dlg.showModal = () => { shown++; };
+  api.openMap();
+  assert.equal(shown, 1, 'Map must actually open');
 });
 
 check('a destination that cannot be read is left skipped, and says so', () => {

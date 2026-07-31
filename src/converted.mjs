@@ -99,5 +99,15 @@ export function substitutionRow(stub, conv, destFor, sep = '/') {
     viaConversion: true,
     stubPath: stub.rel,
     stubName: stub.base,
+    /*
+     * The STUB's root, carried alongside the converted file's own.
+     *
+     * The Map step pairs each source root with a NAS destination, and it has to
+     * pair this row by where the ORIGINAL lived — the converted tree is one
+     * folder holding files from every project, and is never a source the user
+     * mapped. Keyed on the converted file's root instead, every one of these
+     * rows falls through as "source not mapped" and is silently left out.
+     */
+    stubRoot: stub.root,
   };
 }
