@@ -489,23 +489,46 @@ function setAccuracy(mode, stats, path) {
 }
 
 // ── compare ─────────────────────────────────────────────────────────────────
+/*
+ * #emptyState is a CHILD of #main, and both renderTab() and the two failure
+ * paths replace #main's innerHTML wholesale — so the element stops existing the
+ * moment anything has been rendered.
+ *
+ * Referring to it directly therefore worked exactly once per session. The
+ * second run threw "Cannot set properties of null" on the FOURTH line of
+ * runScan, before the try block, which left the window in the state the first
+ * three lines had just put it in: bar showing "Starting…", Scan and Compare
+ * both disabled, no error anywhere. Reported as "scan only broke", and it did —
+ * reliably, after any successful comparison.
+ */
+function hideEmptyState() {
+  var e = $('emptyState');
+  if (e) e.hidden = true;
+}
+
 async function runCompare() {
   $('btnCompare').disabled = true;
   $('bar').hidden = false;
   $('barFill').style.width = '5%';
   $('barText').textContent = 'Starting…';
-  $('emptyState').hidden = true;
+  hideEmptyState();
 
   MAPPING.driveRoots = [];
   MAPPING.nasRoots = [];
 
-  var res = await window.mapper.compare({
-    driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS,
-    manifestPath: MANIFEST, mapping: MAPPING,
-  });
-
-  $('bar').hidden = true;
-  $('btnCompare').disabled = false;
+  // Same `finally` contract as runScan — see the note there.
+  var res;
+  try {
+    res = await window.mapper.compare({
+      driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS,
+      manifestPath: MANIFEST, mapping: MAPPING,
+    });
+  } catch (e) {
+    res = { type: 'error', message: 'The comparison could not be started.\n\n' + (e && e.message || e) };
+  } finally {
+    $('bar').hidden = true;
+    renderPaths();
+  }
 
   if (res.type === 'error') {
     // pre-wrap, because these messages are laid out with newlines and indented
@@ -547,23 +570,38 @@ var SCANNED = false;
  * a comparison against an empty folder produces, arrived at without walking a
  * tree that is not there. Map and the manifest export both open from here.
  */
+/*
+ * The bar and the two buttons are restored in a `finally`.
+ *
+ * They used to be restored on the line after the await, which meant ANY failure
+ * of that promise — a rejected invoke, a worker that never answers, an
+ * exception in main — left the window in the state it was put into before the
+ * call: progress bar frozen at "Starting…", Scan and Compare both disabled, and
+ * nothing on screen saying why. Unrecoverable without restarting the app, and
+ * indistinguishable from "still working". Reported from the field exactly so.
+ */
 async function runScan() {
   $('btnScan').disabled = true;
   $('btnCompare').disabled = true;
   $('bar').hidden = false;
   $('barFill').style.width = '5%';
   $('barText').textContent = 'Starting…';
-  $('emptyState').hidden = true;
+  hideEmptyState();
 
   MAPPING.driveRoots = [];
   MAPPING.nasRoots = [];
 
-  var res = await window.mapper.scan({
-    driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS, mapping: MAPPING,
-  });
-
-  $('bar').hidden = true;
-  renderPaths();
+  var res;
+  try {
+    res = await window.mapper.scan({
+      driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS, mapping: MAPPING,
+    });
+  } catch (e) {
+    res = { type: 'error', message: 'The scan could not be started.\n\n' + (e && e.message || e) };
+  } finally {
+    $('bar').hidden = true;
+    renderPaths();   // re-enables whichever buttons the current roots allow
+  }
 
   if (res.type === 'error') {
     $('main').innerHTML = '<div class="empty"><b>Scan failed</b>' +

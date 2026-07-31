@@ -81,6 +81,18 @@ ipcMain.handle('mapping-path', async () => mappingPath());
  * matching left out, so giving it a second fork/IPC/error path would mean two
  * places to keep the crash and exit-code handling correct.
  */
+/*
+ * Silence, not total elapsed time, is what marks a stall.
+ *
+ * The walk streams a progress message per root, so a healthy run is never quiet
+ * for long even on a large Drive. A blocked readdir on a mount that has dropped
+ * — Drive for Desktop reconnecting, a NAS share gone away — produces no message
+ * and no exit, so the promise simply never settles and the window sits at
+ * "Starting…" with every control disabled, forever. A total timeout cannot tell
+ * that apart from a genuinely long scan; an idle timeout can.
+ */
+const WORKER_IDLE_MS = 5 * 60 * 1000;
+
 function runWorker(cmd, payload, label) {
   return new Promise((resolve) => {
     const child = fork(path.join(__dirname, 'worker.mjs'), [], {
@@ -89,9 +101,38 @@ function runWorker(cmd, payload, label) {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     let settled = false;
-    child.on('message', (m) => {
-      if (m.type === 'progress') { if (win) win.webContents.send('progress', m); return; }
+    let lastPhase = 'starting';
+    let idle = null;
+    const done = (m) => {
+      if (settled) return;
       settled = true;
+      if (idle) clearTimeout(idle);
+      resolve(m);
+      try { child.kill(); } catch { /* already gone */ }
+    };
+    const arm = () => {
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(() => {
+        done({
+          type: 'error',
+          message: `The ${label} stopped responding.\n\n` +
+            `Nothing was heard from it for ${Math.round(WORKER_IDLE_MS / 60000)} minutes ` +
+            `while it was ${lastPhase}.\n\n` +
+            `This usually means a drive or share stopped answering — Google Drive for ` +
+            `Desktop reconnecting, or the NAS dropping off. Check the folders are still ` +
+            `reachable and run it again. Nothing was changed.`,
+        });
+      }, WORKER_IDLE_MS);
+    };
+    arm();
+
+    child.on('message', (m) => {
+      arm();   // any word from the worker means it is still alive
+      if (m.type === 'progress') {
+        lastPhase = m.text || m.phase || lastPhase;
+        if (win) win.webContents.send('progress', m);
+        return;
+      }
       if (m.type === 'done') {
         lastRun = {
           result: m.result, overlap: m.overlap, nasIndex: m.nasIndex,
@@ -100,13 +141,13 @@ function runWorker(cmd, payload, label) {
           scanned: !!m.scanned,
         };
       }
-      resolve(m);
-      child.kill();
+      done(m);
     });
-    child.on('error', (e) => { if (!settled) resolve({ type: 'error', message: e.message }); });
-    child.on('exit', (code) => {
-      if (!settled) resolve({ type: 'error', message: `${label} exited with code ${code}` });
-    });
+    child.on('error', (e) => done({ type: 'error', message: e.message }));
+    child.on('exit', (code) => done({
+      type: 'error',
+      message: `The ${label} stopped unexpectedly (exit code ${code}). Nothing was changed.`,
+    }));
     child.send({ cmd, ...payload });
   });
 }

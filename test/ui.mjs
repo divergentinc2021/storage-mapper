@@ -380,5 +380,35 @@ await acheck('an unreadable file never reaches the copy plan', async () => {
   assert.equal(doc.getElementById('copyBlocked').hidden, false, 'and it must be reported, not silently dropped');
 });
 
+await acheck('a run still works after #emptyState has been destroyed', async () => {
+  /*
+   * renderTab() and both failure paths replace #main's innerHTML, and
+   * #emptyState is a CHILD of #main — so it stops existing as soon as anything
+   * has been rendered. Referring to it directly therefore worked exactly once
+   * per session; the second run threw before entering its try block and left
+   * the window frozen at "Starting…" with every control disabled.
+   */
+  const real = doc.getElementById;
+  doc.getElementById = (id) => (id === 'emptyState' ? null : real(id));
+  try {
+    win.__scanResult = {
+      type: 'done', scanned: true,
+      result: { duplicates: [], conflicts: [], natives: [], errors: [], new: [
+        { drivePath: 'a/x.mp4', name: 'x.mp4', size: 10, driveRoot: 'H:/d', proposedNas: '' },
+      ], stats: {} },
+      droppedRoots: [], nasProbes: [], driveProbes: [],
+    };
+    api.DRIVE_ROOTS = ['H:/d']; api.NAS_ROOTS = ['Z:/n'];
+    await api.runScan();
+  } finally {
+    doc.getElementById = real;
+  }
+
+  assert.equal(doc.getElementById('bar').hidden, true, 'the bar must not be left spinning');
+  assert.equal(doc.getElementById('btnScan').disabled, false, 'Scan must come back');
+  assert.equal(doc.getElementById('btnCompare').disabled, false, 'Compare must come back');
+  assert.equal(api.SCANNED, true, 'and the scan itself must still have worked');
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);
