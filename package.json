@@ -1,6 +1,6 @@
 {
   "name": "storage-mapper",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "Plan a Google Drive to QNAP migration without duplicating anything: finds files already on the NAS under a different name, flags Google-native stubs that cannot be copied, and maps the rest into an existing project taxonomy.",
   "type": "module",
   "main": "electron/main.cjs",

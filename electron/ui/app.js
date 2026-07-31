@@ -1073,6 +1073,8 @@ async function openCopy() {
   $('copyTitle').textContent = 'Review before copying';
   $('copyHint').textContent = 'Checking what is already at the destination…';
   $('copyResult').hidden = true;
+  $('copyBlocked').hidden = true;
+  BLOCKED = [];
   $('copyBar').hidden = true;
   $('copyCancel').hidden = true;
   $('copyDry').disabled = false;
@@ -1082,7 +1084,76 @@ async function openCopy() {
   // that was never part of the comparison.
   var existing = await window.mapper.inspectDest(rows.map(function (r) { return r.proposedNas; }));
   COPY_ROWS = classifyAgainstDest(rows, existing || {});
+
+  /*
+   * Prove every source is readable before offering to copy it. Anything that
+   * cannot be read is taken out of the plan here rather than discovered by the
+   * copy engine, which reports per-directory and leaves the user reading a log
+   * to find out which file it was.
+   */
+  $('copyHint').textContent = 'Checking every file can actually be read…';
+  var pf = await window.mapper.preflightCopy(COPY_ROWS);
+  BLOCKED = pf.blocked || [];
+  if (BLOCKED.length) {
+    var byPath = {};
+    BLOCKED.forEach(function (b) { byPath[b.proposedNas] = b; });
+    COPY_ROWS = COPY_ROWS.filter(function (r) { return !byPath[r.proposedNas]; });
+  }
   renderCopyReview();
+  renderBlocked();
+}
+
+var BLOCKED = [];
+
+/*
+ * Say what cannot go, and why, in the same breath as what can. Grouped by cause
+ * because "6 Google-native files" is one decision and "2 locked files" is a
+ * different one — a flat list of 8 reads as eight separate problems.
+ */
+function renderBlocked() {
+  var el = $('copyBlocked');
+  if (!el) return;
+  if (!BLOCKED.length) { el.hidden = true; el.innerHTML = ''; return; }
+
+  var groups = {};
+  BLOCKED.forEach(function (b) {
+    if (!groups[b.kind]) groups[b.kind] = { kind: b.kind, reason: b.reason, rows: [] };
+    groups[b.kind].rows.push(b);
+  });
+  var order = ['stub', 'permission', 'locked', 'gone', 'folder', 'nosource', 'unreadable'];
+  var keys = Object.keys(groups).sort(function (a, b) {
+    return (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99);
+  });
+
+  el.hidden = false;
+  el.innerHTML =
+    '<b>' + BLOCKED.length.toLocaleString() + ' file(s) cannot be copied and have been left out.</b> ' +
+    'They were checked before the copy, not during it, so nothing below will fail mid-run.' +
+    keys.map(function (k) {
+      var g = groups[k];
+      return '<div style="margin-top:7px"><b>' + g.rows.length.toLocaleString() + '</b> — ' +
+        esc(g.reason) + '<div style="margin-top:3px">' +
+        g.rows.slice(0, 6).map(function (r) { return '<div>· ' + esc(r.name) + '</div>'; }).join('') +
+        (g.rows.length > 6 ? '<div>· …and ' + (g.rows.length - 6).toLocaleString() + ' more</div>' : '') +
+        '</div></div>';
+    }).join('') +
+    '<div style="margin-top:8px"><button class="btn" id="btnBlockedCsv">Save this list as CSV…</button></div>' +
+    (groups.stub
+      ? '<div style="margin-top:6px"><small>Google-native files have no bytes on disk. Export them from ' +
+        'Google Drive first — the Storage Explorer dashboard lists what each type converts to — then ' +
+        'they will copy like any other file.</small></div>'
+      : '');
+
+  $('btnBlockedCsv').addEventListener('click', async function () {
+    var r = await window.mapper.exportFailures(BLOCKED.map(function (b) {
+      return { name: b.name, drivePath: b.drivePath, proposedNas: b.proposedNas,
+               size: b.size, why: b.reason };
+    }));
+    if (r && r.ok) {
+      el.insertAdjacentHTML('beforeend',
+        '<div class="okline" style="margin-top:6px">Written to ' + esc(r.file) + '</div>');
+    }
+  });
 }
 
 async function startCopy(dryRun) {

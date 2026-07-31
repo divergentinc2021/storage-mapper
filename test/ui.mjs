@@ -55,6 +55,7 @@ const win = {
     exportOptions: () => Promise.resolve({ hasRun: false, scanned: false, driveFiles: 0, newRows: 0, compared: false }),
     exportManifest: noop, verifyCopy: () => Promise.resolve({ ok: 0, missing: [], short: [] }),
     exportFailures: noop, inspectDest: () => Promise.resolve({}),
+    preflightCopy: (rows) => Promise.resolve(win.__preflight || { ready: rows, blocked: [] }),
   },
   __scanResult: null,
   matchMedia: () => ({ matches: false, addEventListener() {} }),
@@ -69,7 +70,9 @@ const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(
   get NAS_ROOTS(){return NAS_ROOTS}, set NAS_ROOTS(v){NAS_ROOTS=v},
   get SEP(){return SEP}, set SEP(v){SEP=v},
   get SCANNED(){return SCANNED}, set SCANNED(v){SCANNED=v},
-  runScan, runCompare };`);
+  get COPY_ROWS(){return COPY_ROWS}, set COPY_ROWS(v){COPY_ROWS=v},
+  get BLOCKED(){return BLOCKED}, set BLOCKED(v){BLOCKED=v},
+  runScan, runCompare, openCopy };`);
 const api = fn(...Object.values(sandbox));
 
 let failures = 0;
@@ -354,6 +357,27 @@ await acheck('a FAILED compare clears the stage instead of leaving the last run 
     'Export stayed lit after a failure and silently wrote the PREVIOUS run');
   assert.equal(mapBtn.disabled, true, 'Map must not offer rows with no run behind them');
   assert.equal(copyBtn.disabled, true);
+});
+
+await acheck('an unreadable file never reaches the copy plan', async () => {
+  api.MAPPED = [
+    { drivePath: 'a/good.mp4', name: 'good.mp4', size: 10, driveRoot: 'H:/d',
+      driveAbs: 'H:/d/a/good.mp4', proposedNas: 'Z:/N/a/good.mp4' },
+    { drivePath: 'a/stub.gvid', name: 'stub.gvid', size: 174, driveRoot: 'H:/d',
+      driveAbs: 'H:/d/a/stub.gvid', proposedNas: 'Z:/N/a/stub.gvid' },
+  ];
+  api.RESULT = { new: api.MAPPED };
+  win.__preflight = {
+    ready: [api.MAPPED[0]],
+    blocked: [{ ...api.MAPPED[1], kind: 'stub',
+                reason: 'a Google-native file with no contents — there is nothing to copy' }],
+  };
+  await api.openCopy();
+
+  assert.equal(api.BLOCKED.length, 1);
+  assert.equal(api.COPY_ROWS.length, 1, 'the blocked row must be removed from the plan entirely');
+  assert.equal(api.COPY_ROWS[0].name, 'good.mp4');
+  assert.equal(doc.getElementById('copyBlocked').hidden, false, 'and it must be reported, not silently dropped');
 });
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
