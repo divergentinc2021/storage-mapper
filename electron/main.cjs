@@ -308,24 +308,38 @@ function diagnoseSource(row) {
  * effort on files that were going to fail. Measured cost: 0.6ms per stub,
  * ~5ms per real file.
  */
-function probeReadable(abs) {
+/*
+ * ASYNC, deliberately, and it is not a style preference.
+ *
+ * This ran with statSync/openSync/readSync on the main process. That is the
+ * process that owns the window, so a few hundred probes against a Google Drive
+ * for Desktop mount — where a stat can go to the network — held its event loop
+ * long enough for Windows to mark the window "Not Responding". The progress
+ * events the loop was dutifully sending could not be delivered either, because
+ * nothing could run between them.
+ *
+ * Awaiting the promise API yields between files. Same checks, same verdicts.
+ */
+async function probeReadable(abs) {
   let st;
   try {
-    st = fs.statSync(abs);
+    st = await fs.promises.stat(abs);
   } catch (e) {
     return { ok: false, kind: 'gone', reason: `the source is no longer there (${e.code || e.message})` };
   }
   if (st.isDirectory()) return { ok: false, kind: 'folder', reason: 'the source is a folder, not a file' };
 
-  let fd;
+  let fh;
   try {
-    fd = fs.openSync(abs, 'r');
+    fh = await fs.promises.open(abs, 'r');
   } catch (e) {
     return { ok: false, kind: openKind(e), reason: openReason(e) };
   }
   try {
     if (st.size === 0) return { ok: true };   // legitimately empty; nothing to read
-    fs.readSync(fd, Buffer.alloc(1), 0, 1, 0);
+    // One byte. open() SUCCEEDS on a contentless Drive stub — only a read fails,
+    // which is the whole reason this probe exists.
+    await fh.read(Buffer.alloc(1), 0, 1, 0);
     return { ok: true };
   } catch (e) {
     const code = e.code || '';
@@ -338,7 +352,7 @@ function probeReadable(abs) {
     }
     return { ok: false, kind: openKind(e), reason: openReason(e) };
   } finally {
-    try { fs.closeSync(fd); } catch { /* already gone */ }
+    try { await fh.close(); } catch { /* already gone */ }
   }
 }
 
@@ -367,12 +381,15 @@ ipcMain.handle('preflight-copy', async (_e, rows) => {
         ? path.join(row.driveRoot, String(row.drivePath).split('/').join(path.sep))
         : null);
     if (!src) { blocked.push({ ...row, kind: 'nosource', reason: 'source path unknown' }); continue; }
-    const v = probeReadable(src);
+    const v = await probeReadable(src);
     if (v.ok) ready.push(row);
     else blocked.push({ ...row, kind: v.kind, reason: v.reason });
-    if (win && (i % 50 === 0 || i === list.length - 1)) {
+    // Every 25 now, and it actually arrives: the loop yields between files, so
+    // the renderer gets a chance to paint each one.
+    if (win && (i % 25 === 0 || i === list.length - 1)) {
       win.webContents.send('copy-event', {
         type: 'preflight', done: i + 1, total: list.length, blocked: blocked.length,
+        name: row.name || '',
       });
     }
   }
@@ -589,13 +606,26 @@ ipcMain.handle('app-info', async () => ({
  * user just picked may be outside the NAS roots that were scanned, so the
  * comparison index cannot answer for it.
  */
+/*
+ * Async for the same reason as probeReadable: this stats one path per planned
+ * file, over SMB, on the process that owns the window. Synchronously that is
+ * hundreds of blocking network round-trips before the copy dialog can draw
+ * anything.
+ */
 ipcMain.handle('inspect-dest', async (_e, paths) => {
+  const list = paths || [];
   const out = {};
-  for (const p of paths || []) {
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i];
     try {
-      const st = fs.statSync(p);
+      const st = await fs.promises.stat(p);
       out[String(p).toLowerCase().split('\\').join('/')] = { size: st.size, mtimeMs: st.mtimeMs };
     } catch { /* not there: that is the answer */ }
+    if (win && (i % 50 === 0 || i === list.length - 1)) {
+      win.webContents.send('copy-event', {
+        type: 'inspect', done: i + 1, total: list.length,
+      });
+    }
   }
   return out;
 });

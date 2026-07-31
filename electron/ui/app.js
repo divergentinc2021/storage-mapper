@@ -1921,6 +1921,24 @@ async function init() {
     startCopy(false);
   });
   window.mapper.onCopyEvent(function (e) {
+    /*
+     * The pre-flight and the manifest check both report, and neither was drawn.
+     * Both read files one at a time off a network mount, so on a large plan the
+     * dialog sat on a single sentence for minutes with no sign it was alive —
+     * which is exactly what a hung app looks like.
+     */
+    if (e.type === 'preflight' || e.type === 'verify' || e.type === 'inspect') {
+      var what = e.type === 'preflight'
+        ? 'Checking every file can actually be read'
+        : e.type === 'inspect'
+          ? 'Looking at what is already at the destination'
+          : 'Checking the files already there are the same file';
+      $('copyHint').textContent =
+        what + ' — ' + e.done.toLocaleString() + ' of ' + e.total.toLocaleString() +
+        (e.blocked ? ' · ' + e.blocked.toLocaleString() + ' cannot be copied' : '') +
+        (e.name ? ' · ' + e.name : '');
+      return;
+    }
     if (e.type === 'group-start') {
       $('copyFill').style.width = Math.round(100 * e.index / Math.max(1, e.total)) + '%';
       $('copyStatus').textContent = 'Folder ' + (e.index + 1) + ' of ' + e.total +

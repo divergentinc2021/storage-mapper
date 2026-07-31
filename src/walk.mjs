@@ -172,12 +172,26 @@ export function probeRoot(root) {
  *
  * @returns {{roots: string[], dropped: {root:string, insideOf:string}[]}}
  */
+/** Normalised for comparison: absolute, forward slashes, case-folded on Windows. */
+function normForCompare(p) {
+  let s = path.resolve(p).split(path.sep).join('/');
+  if (process.platform === 'win32') s = s.toLowerCase();
+  return s.replace(/\/+$/, '');
+}
+
+/**
+ * Is `abs` inside `root`?
+ *
+ * Boundary-aware: "…/_Converted for NAS2" is NOT inside "…/_Converted for NAS",
+ * which a bare startsWith would happily claim.
+ */
+export function isUnder(abs, root) {
+  const a = normForCompare(abs), r = normForCompare(root);
+  return a === r || a.startsWith(r + '/');
+}
+
 export function dedupeRoots(roots) {
-  const norm = (p) => {
-    let s = path.resolve(p).split(path.sep).join('/');
-    if (process.platform === 'win32') s = s.toLowerCase();
-    return s.replace(/\/+$/, '');
-  };
+  const norm = normForCompare;
   const seen = new Map();
   for (const r of roots) {
     const k = norm(r);

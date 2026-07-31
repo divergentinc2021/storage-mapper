@@ -5,7 +5,7 @@
  * It imports the same src/ modules the CLI uses — there is no second copy of the
  * matching logic to drift out of sync with the tested one.
  */
-import { walk, driveMountVerdict, dedupeRoots, probeRoot } from '../src/walk.mjs';
+import { walk, driveMountVerdict, dedupeRoots, probeRoot, isUnder } from '../src/walk.mjs';
 import { loadManifest, emptyManifest } from '../src/manifest.mjs';
 import { loadMapping } from '../src/mapping.mjs';
 import { match, nasInternalOverlap } from '../src/match.mjs';
@@ -200,7 +200,7 @@ process.on('message', async (msg) => {
     }
 
     send({ type: 'progress', phase: 'drive', text: 'Indexing Google Drive (metadata only)…' });
-    const driveFiles = [];
+    let driveFiles = [];   // reassigned below to drop the converted tree
     for (const r of driveRoots) {
       const f = walk(r, { onTick: walkTick('drive') });
       driveFiles.push(...f);
@@ -214,11 +214,35 @@ process.on('message', async (msg) => {
      * other tree; match() uses it to give native stubs a real file to copy.
      */
     const convertedFiles = [];
-    for (const r of dedupeRoots(raw.convertedRoots || []).roots) {
+    const convRoots = dedupeRoots(raw.convertedRoots || []).roots;
+    for (const r of convRoots) {
       send({ type: 'progress', phase: 'drive', text: 'Indexing converted files…' });
       const f = walk(r, { onTick: walkTick('drive') });
       convertedFiles.push(...f);
       send({ type: 'progress', phase: 'drive', text: `${r} — ${f.length} converted` });
+    }
+
+    /*
+     * The converted folder normally lives INSIDE the Drive being compared —
+     * My Drive/_Converted for NAS is the Explorer's own output location. So the
+     * Drive walk picks up every converted file as an ordinary new file, and it
+     * would be copied TWICE: once mirrored under a _Converted for NAS folder on
+     * the NAS, and once as the substitute for its stub. The first of those is
+     * exactly the parallel folder of orphans this feature exists to avoid.
+     *
+     * Converted output is derived, not source. It reaches the NAS only by
+     * standing in for a stub, so it is removed from the Drive side here.
+     */
+    if (convRoots.length) {
+      const before = driveFiles.length;
+      driveFiles = driveFiles.filter(
+        (f) => f.error || !convRoots.some((r) => isUnder(f.abs, r))
+      );
+      const removed = before - driveFiles.length;
+      if (removed) {
+        send({ type: 'progress', phase: 'drive',
+               text: `${removed} converted file(s) excluded from the Drive side` });
+      }
     }
 
     send({ type: 'progress', phase: 'match', text: 'Comparing…' });

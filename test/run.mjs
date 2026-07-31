@@ -890,6 +890,59 @@ check('a duplicate row carries what is needed to verify it later', () => {
   assert.ok(r.md5, 'the Drive md5 to check it against');
 });
 
+/*
+ * The converted folder normally sits INSIDE the Drive being compared, so the
+ * Drive walk sees its contents as ordinary new files. Left in, every converted
+ * file is copied twice — once into a _Converted for NAS mirror on the NAS, and
+ * once as the substitute for its stub. The mirror is the exact "parallel folder
+ * of orphans" the substitution feature exists to prevent.
+ */
+check('a converted file inside the Drive root is not ALSO copied as itself', async () => {
+  const wk = await import('../src/walk.mjs');
+  const m = await import('../src/match.mjs');
+
+  const driveRoot = path.join(TMP, 'dd', 'My Drive');
+  const convRoot = path.join(driveRoot, '_Converted for NAS');
+  w(path.join(driveRoot, 'Proj', 'video.mp4'), C.brandNew);
+  w(path.join(convRoot, 'Proj', 'Plan.docx'), C.identical);
+  // The stub itself, which is what the converted file stands in for.
+  w(path.join(driveRoot, 'Proj', 'Plan.gdoc'), '{"doc_id":"abc"}');
+
+  let driveFiles = wk.walk(driveRoot);
+  const convertedFiles = wk.walk(convRoot);
+  assert.ok(driveFiles.some((f) => /Plan\.docx$/.test(f.base)),
+    'precondition: the walk really does pick the converted file up');
+
+  driveFiles = driveFiles.filter((f) => f.error || !wk.isUnder(f.abs, convRoot));
+  assert.ok(!driveFiles.some((f) => /Plan\.docx$/.test(f.base)), 'excluded from the Drive side');
+  assert.ok(driveFiles.some((f) => /video\.mp4$/.test(f.base)), 'ordinary files untouched');
+  assert.ok(driveFiles.some((f) => /Plan\.gdoc$/.test(f.base)), 'and the stub is still there');
+
+  const r = await m.match({
+    driveFiles, nasFiles: [], convertedFiles,
+    manifest: { byId: new Map(), byMd5: new Map(), bySize: new Map(), count: 0, withMd5: 0 },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+  });
+
+  const dests = r.new.map((x) => x.proposedNas);
+  assert.equal(dests.filter((d) => /_Converted for NAS/.test(d)).length, 0,
+    'nothing may be copied into a mirror of the converted folder');
+  assert.equal(r.new.filter((x) => /Plan\.docx$/.test(x.name)).length, 1,
+    'the converted file is planned exactly once');
+  const sub = r.new.find((x) => x.viaConversion);
+  assert.ok(sub, 'and it arrives as the stub substitution');
+  assert.equal(sub.proposedNas, 'Z:/NAS/Proj/Plan.docx', 'landing where the stub belonged');
+});
+
+check('isUnder does not treat a sibling with a shared prefix as inside', async () => {
+  const wk = await import('../src/walk.mjs');
+  assert.equal(wk.isUnder('/a/_Converted for NAS/x.docx', '/a/_Converted for NAS'), true);
+  assert.equal(wk.isUnder('/a/_Converted for NAS2/x.docx', '/a/_Converted for NAS'), false,
+    'a bare startsWith would wrongly swallow this folder');
+  assert.equal(wk.isUnder('/a/_Converted for NAS', '/a/_Converted for NAS'), true);
+  assert.equal(wk.isUnder('/a/other/x.docx', '/a/_Converted for NAS'), false);
+});
+
 check('walk reports where it is while it runs', async () => {
   const wk = await import('../src/walk.mjs');
   const seen = [];
