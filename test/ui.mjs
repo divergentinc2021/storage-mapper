@@ -67,7 +67,10 @@ const sandbox = { document: doc, window: win, console, setTimeout, Set, JSON, Ma
 const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(){return RESULT}, set RESULT(v){RESULT=v},
   syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest, applyDestVerdicts,
   clashingRoots, renderPaths, verifyDuplicates, destForDrivePath,
+  actionableRows, electedConflictRows, alongsideName,
   get MAPPING(){return MAPPING}, set MAPPING(v){MAPPING=v},
+  get CONFLICT_PICKS(){return CONFLICT_PICKS}, set CONFLICT_PICKS(v){CONFLICT_PICKS=v},
+  get CONV_ROOTS(){return CONV_ROOTS}, set CONV_ROOTS(v){CONV_ROOTS=v},
   get MAPPED(){return MAPPED}, set MAPPED(v){MAPPED=v},
   get DRIVE_ROOTS(){return DRIVE_ROOTS}, set DRIVE_ROOTS(v){DRIVE_ROOTS=v},
   get NAS_ROOTS(){return NAS_ROOTS}, set NAS_ROOTS(v){NAS_ROOTS=v},
@@ -167,7 +170,8 @@ check('after a comparison Map lights up but Copy stays LOCKED', () => {
   assert.equal(mapBtn.disabled, false, 'Map should be available once there are new files');
   assert.match(mapBtn.textContent, /Map 2 new/);
   assert.equal(copyBtn.disabled, true, 'Copy must stay locked until a destination is mapped');
-  assert.match(copyBtn.title, /Map a destination first/);
+  // Wording is free to change; what it must do is send the user to Map.
+  assert.match(copyBtn.title, /\bMap\b/);
 });
 
 check('once mapped, Copy lights up with the count', () => {
@@ -506,6 +510,97 @@ check('verifying does not disturb matches it could not read', async () => {
   } finally {
     win.alert = realAlert;
   }
+});
+
+/*
+ * Reported directly: "a bit wrong to disable map and copy just because there is
+ * no new". A run with 0 new but an updated file and convertible stubs has work
+ * to do, and the buttons that do it were both dead.
+ */
+check('an updated file is copyable even though nothing is new', () => {
+  api.CONFLICT_PICKS = {};
+  api.MAPPED = null;
+  api.SCANNED = false;
+  api.RESULT = {
+    duplicates: [], new: [], natives: [], errors: [], stats: {},
+    conflicts: [{
+      drivePath: 'P/Report.docx', nasPath: 'Z:/n/P/Report.docx', name: 'Report.docx',
+      driveSize: 331, nasSize: 330, size: 331, reason: 'same name, different size',
+      driveRoot: 'H:/d', driveAbs: 'H:/d/P/Report.docx',
+      proposedNas: 'Z:/n/P/Report.docx', mappedBy: 'mirror',
+    }],
+  };
+
+  api.syncStageButtons();
+  assert.equal(doc.getElementById('btnMapTop').disabled, true, 'nothing chosen yet, so nothing to do');
+  assert.match(doc.getElementById('btnMapTop').title, /Conflicts/,
+    'but it must say where the waiting work is, not just "nothing new"');
+
+  api.CONFLICT_PICKS = { 'P/Report.docx': 'alongside' };
+  api.syncStageButtons();
+  assert.equal(api.actionableRows().length, 1);
+  assert.equal(doc.getElementById('btnMapTop').disabled, false, 'Map is live');
+  assert.match(doc.getElementById('btnMapTop').textContent, /Map 1 file…/,
+    'and it must not call an elected conflict "new"');
+
+  // Copy stays behind Map, as it does for new files — see the gate test above.
+  assert.equal(doc.getElementById('btnCopyTop').disabled, true);
+  api.MAPPED = api.actionableRows();
+  api.syncStageButtons();
+  assert.equal(doc.getElementById('btnCopyTop').disabled, false, 'and unlocks once mapped');
+});
+
+check('copy alongside never targets the NAS file it conflicts with', () => {
+  api.RESULT = {
+    duplicates: [], new: [], natives: [], errors: [], stats: {},
+    conflicts: [{
+      drivePath: 'P/Report.docx', nasPath: 'Z:/n/P/Report.docx', name: 'Report.docx',
+      driveSize: 331, nasSize: 330, size: 331, reason: 'same name, different size',
+      driveRoot: 'H:/d', driveAbs: 'H:/d/P/Report.docx',
+      proposedNas: 'Z:/n/P/Report.docx', mappedBy: 'mirror',
+    }],
+  };
+
+  api.CONFLICT_PICKS = { 'P/Report.docx': 'alongside' };
+  var r = api.electedConflictRows()[0];
+  assert.notEqual(r.proposedNas, 'Z:/n/P/Report.docx', 'the default must not overwrite');
+  assert.equal(r.proposedNas, 'Z:/n/P/Report (from Drive).docx');
+  assert.match(r.mappedBy, /alongside/);
+  assert.ok(r.driveAbs, 'and it must be copyable');
+
+  api.CONFLICT_PICKS = { 'P/Report.docx': 'replace' };
+  var r2 = api.electedConflictRows()[0];
+  assert.equal(r2.proposedNas, 'Z:/n/P/Report.docx', 'replace targets the NAS file, by explicit choice');
+  assert.match(r2.mappedBy, /replaces/);
+});
+
+check('the alongside name keeps the extension', () => {
+  assert.equal(api.alongsideName('Z:/n/a/Report.docx'), 'Z:/n/a/Report (from Drive).docx');
+  assert.equal(api.alongsideName('Z:\\n\\a\\Report.tar.gz'), 'Z:\\n\\a\\Report.tar (from Drive).gz');
+  assert.equal(api.alongsideName('Z:/n/README'), 'Z:/n/README (from Drive)');
+});
+
+check('leaving a conflict alone keeps it out of the plan', () => {
+  api.CONFLICT_PICKS = {};
+  assert.equal(api.electedConflictRows().length, 0);
+  assert.equal(api.actionableRows().length, 0);
+});
+
+check('unconverted stubs are named as waiting work, not a dead end', () => {
+  api.CONFLICT_PICKS = {};
+  api.CONV_ROOTS = [];
+  api.MAPPED = null;
+  api.SCANNED = false;
+  api.RESULT = {
+    duplicates: [], new: [], conflicts: [], errors: [], stats: {},
+    natives: [
+      { drivePath: 'P/A.gdoc', name: 'A.gdoc', kind: 'doc', resolved: false },
+      { drivePath: 'P/B.gdoc', name: 'B.gdoc', kind: 'doc', resolved: false },
+    ],
+  };
+  api.syncStageButtons();
+  assert.match(doc.getElementById('btnMapTop').title, /2 Google stub/,
+    'the tooltip has to point at the stubs rather than claim there is nothing to do');
 });
 
 check('a destination that cannot be read is left skipped, and says so', () => {

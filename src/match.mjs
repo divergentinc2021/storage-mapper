@@ -190,6 +190,11 @@ export async function match({
       out.conflicts.push({
         drivePath: f.rel, nasPath: hit.abs, name: f.base,
         driveSize: f.size, nasSize: hit.size, reason: 'md5 differs at equal size+name',
+        // A conflict is a decision the USER makes, so the row has to be able to
+        // become a copy once they make it. Without the source it could only ever
+        // be looked at.
+        driveRoot: f.root, driveAbs: f.abs, size: f.size, md5: driveMd5 || '',
+        proposedNas: dest ? dest.nas : '', mappedBy: dest ? dest.rule : '(unmapped)',
       });
       continue;
     }
@@ -216,6 +221,8 @@ export async function match({
       out.conflicts.push({
         drivePath: f.rel, nasPath: sameName[0].abs, name: f.base,
         driveSize: f.size, nasSize: sameName[0].size, reason: 'same name, different size',
+        driveRoot: f.root, driveAbs: f.abs, size: f.size, md5: driveMd5 || '',
+        proposedNas: dest ? dest.nas : '', mappedBy: dest ? dest.rule : '(unmapped)',
       });
       continue;
     }

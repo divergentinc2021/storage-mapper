@@ -549,13 +549,14 @@ async function runCompare() {
       rows that no longer had a comparison behind them. Stale-but-lit is worse
       than dark, because nothing on screen says which run you are looking at.
     */
-    RESULT = null; MAPPED = null; OVERLAP = []; SCANNED = false;
+    RESULT = null; MAPPED = null; OVERLAP = []; SCANNED = false; CONFLICT_PICKS = {};
     $('btnExport').disabled = true;
     syncStageButtons();
     return;
   }
 
   RESULT = res.result;
+  CONFLICT_PICKS = {};   // choices belong to the run that raised the conflicts
   OVERLAP = res.overlap || [];
   SCANNED = false;
   setAccuracy(res.accuracy, res.manifestStats, MANIFEST);
@@ -612,13 +613,14 @@ async function runScan() {
   if (res.type === 'error') {
     $('main').innerHTML = '<div class="empty"><b>Scan failed</b>' +
       '<pre class="errmsg">' + esc(res.message) + '</pre></div>';
-    RESULT = null; MAPPED = null; SCANNED = false;
+    RESULT = null; MAPPED = null; SCANNED = false; CONFLICT_PICKS = {};
     $('btnExport').disabled = true;
     syncStageButtons();
     return;
   }
 
   RESULT = res.result;
+  CONFLICT_PICKS = {};   // choices belong to the run that raised the conflicts
   OVERLAP = [];
   SCANNED = true;
   DROPPED = res.droppedRoots || [];
@@ -861,28 +863,98 @@ function renderTab() {
     var openBtn = $('btnCopyOpen');
     if (openBtn) openBtn.addEventListener('click', openCopy);
   } else if (TAB === 'conflicts') {
-    m.innerHTML = droppedNote() + table(['Drive file', 'NAS file', 'Drive size', 'NAS size', 'Why'],
-      RESULT.conflicts, function (r) {
+    var picked = electedConflictRows().length;
+    m.innerHTML = droppedNote() +
+      (RESULT.conflicts.length
+        ? '<div class="note"><b>A file that exists on both sides and differs.</b> ' +
+          'Usually one that was updated in Drive after it was copied. The tool cannot ' +
+          'know which version you want, so it does nothing until you say.' +
+          '<br><b>Copy alongside</b> writes the Drive version next to the NAS one as ' +
+          '<i>name (from Drive).ext</i> — nothing is overwritten and you reconcile later. ' +
+          '<b>Replace</b> writes over the NAS file.' +
+          (picked ? ' <b>' + picked + ' selected — they are included in Map and Copy.</b>' : '') +
+          '</div>'
+        : '') +
+      table(['Drive file', 'NAS file', 'Drive size', 'NAS size', 'Why', 'What to do'],
+      RESULT.conflicts, function (r, i) {
+        var mode = CONFLICT_PICKS[r.drivePath] || '';
+        var opt = function (v, label) {
+          return '<option value="' + v + '"' + (mode === v ? ' selected' : '') + '>' + label + '</option>';
+        };
         return '<tr><td class="path">' + esc(r.drivePath) + '</td>' +
           '<td class="path">' + esc(r.nasPath) + '</td>' +
           '<td class="num">' + fmtBytes(r.driveSize) + '</td>' +
           '<td class="num">' + fmtBytes(r.nasSize) + '</td>' +
-          '<td>' + esc(r.reason) + '</td></tr>';
+          '<td>' + esc(r.reason) + '</td>' +
+          '<td><select data-conf="' + i + '">' +
+            opt('', 'Leave it') +
+            opt('alongside', 'Copy alongside') +
+            opt('replace', 'Replace the NAS file') +
+          '</select></td></tr>';
       });
+    m.querySelectorAll('select[data-conf]').forEach(function (s) {
+      s.addEventListener('change', function () {
+        var row = RESULT.conflicts[Number(s.dataset.conf)];
+        if (s.value) CONFLICT_PICKS[row.drivePath] = s.value;
+        else delete CONFLICT_PICKS[row.drivePath];
+        // A choice changes what the plan contains, so any existing plan is stale.
+        MAPPED = null;
+        renderCounts();
+        syncStageButtons();
+        renderTab();
+      });
+    });
   } else if (TAB === 'natives') {
+    var resolved = RESULT.natives.filter(function (n) { return n.resolved; }).length;
+    var unresolved = RESULT.natives.length - resolved;
     m.innerHTML = droppedNote() +
-      '<div class="note"><b>These cannot be copied.</b> Google Drive for Desktop stores a ' +
+      '<div class="note"><b>A stub is not a file.</b> Google Drive for Desktop stores a ' +
       'Doc, Sheet or Slide as a few hundred bytes of JSON holding a URL — copying one ' +
-      'archives a dead link. Export them through the Drive API or rclone ' +
-      '<code>--drive-export-formats</code> instead.</div>' +
-      table(['Drive file', 'Type', 'Must be exported as', 'Drive id'],
+      'archives a dead link.' +
+      /*
+       * The tab used to stop at "these cannot be copied", which stopped being
+       * true once the Explorer could convert them. Left as it was, 118 stubs
+       * looked like a dead end when the files to copy in their place may
+       * already exist — the app just had not been told where.
+       */
+      (resolved
+        ? '<br><b>' + resolved.toLocaleString() + '</b> of these have a converted file and ' +
+          'ARE being copied, to where the original belonged.'
+        : '') +
+      (unresolved
+        ? '<br><b>' + unresolved.toLocaleString() + '</b> have no converted file yet. ' +
+          (CONV_ROOTS.length
+            ? 'Nothing in the converted folder matches them by name — convert them in the ' +
+              'Storage Explorer first, then compare again.'
+            : 'Convert them in the Storage Explorer, then point <i>Converted files</i> at ' +
+              '<code>My Drive/_Converted for NAS</code> and compare again — they become ' +
+              'ordinary copies.') +
+          ' <button class="btn sm" id="btnConvHere">Choose the converted folder…</button>'
+        : '') +
+      '</div>' +
+      table(['Drive file', 'Type', 'Must be exported as', 'Status'],
         RESULT.natives, function (r) {
           return '<tr><td class="path">' + esc(r.drivePath) + '</td>' +
             '<td>' + esc(r.kind) + '</td>' +
             '<td>' + (r.exportAs ? '.' + esc(r.exportAs)
               : '<span style="color:var(--critical)">no export path — must stay in Drive</span>') + '</td>' +
-            '<td class="path"><small>' + esc(r.docId) + '</small></td></tr>';
+            '<td>' + (r.resolved
+              ? '<span class="tier md5">' + esc(r.convertedAs || 'converted') + ' will be copied</span>'
+              : '<span class="tier weak">not converted</span>') + '</td></tr>';
         });
+    var cb = $('btnConvHere');
+    if (cb) {
+      cb.addEventListener('click', async function () {
+        var p = await window.mapper.pickFolder(
+          'Choose the converted-files folder (My Drive/_Converted for NAS)', true);
+        (p || []).forEach(function (x) { if (CONV_ROOTS.indexOf(x) === -1) CONV_ROOTS.push(x); });
+        renderPaths();
+        // Say what happens next rather than leaving the same numbers on screen.
+        if (p && p.length) $('main').innerHTML =
+          '<div class="empty"><b>Converted folder set.</b><br>Run <i>Compare</i> again to ' +
+          'match the stubs to their converted files.</div>';
+      });
+    }
   } else {
     m.innerHTML = droppedNote() +
       '<div class="note">The same file present in more than one NAS tree, matched on name and ' +
@@ -1024,20 +1096,65 @@ function joinDest(root, rel) {
   return t ? r + SEP + t : r;
 }
 
+/*
+ * Everything the run could still act on — NOT just RESULT.new.
+ *
+ * Gating the whole pipeline on the new list meant "nothing new" was treated as
+ * "nothing to do", which is wrong in the two cases that matter most on a real
+ * migration: a file that was UPDATED in Drive sits in conflicts, and a Google
+ * stub with a converted equivalent is only in the new list if the converted
+ * folder was pointed at. Both are work; neither is new. Map and Copy went grey
+ * over them and the run looked finished when it was not.
+ */
+function actionableRows() {
+  if (!RESULT) return [];
+  return (RESULT.new || []).concat(electedConflictRows());
+}
+
 function syncStageButtons() {
   var mapBtn = $('btnMapTop'), copyBtn = $('btnCopyTop');
-  var newCount = RESULT ? RESULT.new.length : 0;
-  mapBtn.disabled = !newCount;
-  mapBtn.textContent = newCount ? 'Map ' + newCount.toLocaleString() + ' new…' : 'Map…';
+  var rows = actionableRows();
+  var count = rows.length;
+  var elected = electedConflictRows().length;
+  var conflictsWaiting = RESULT ? (RESULT.conflicts || []).length - elected : 0;
+  var stubsWaiting = RESULT
+    ? (RESULT.natives || []).filter(function (n) { return !n.resolved; }).length : 0;
+
+  mapBtn.disabled = !count;
+  // "new" only while that is all these are; electing a conflict makes the word
+  // wrong, and a count that quietly means something else is worse than a
+  // vaguer one.
+  mapBtn.textContent = count
+    ? 'Map ' + count.toLocaleString() +
+      (elected ? (count === 1 ? ' file…' : ' files…') : ' new…')
+    : 'Map…';
   mapBtn.title = !RESULT ? 'Run Scan only, or Compare, first'
-    : newCount ? 'Choose where the new files should go'
+    : count ? 'Choose where these files should go'
     : SCANNED ? 'Nothing was found in the folders you scanned'
+    // Say what is waiting, and where. "Nothing new" is true and useless when
+    // there are conflicts and stubs sitting in other tabs.
+    : conflictsWaiting
+      ? 'Nothing new. ' + conflictsWaiting + ' updated file(s) are waiting in Conflicts — ' +
+        'choose what to do with them there'
+    : stubsWaiting
+      ? 'Nothing new. ' + stubsWaiting + ' Google stub(s) need their converted files — ' +
+        'see the Native stubs tab'
     : 'Nothing new — everything is already on the NAS';
 
-  var ready = MAPPED ? MAPPED.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); }) : [];
+  /*
+   * Still gated on MAPPED, deliberately. Rows can arrive with a destination
+   * already filled in from a mapping rule, but Map is where those destinations
+   * are actually looked at and confirmed — going straight to Copy would act on
+   * paths nobody has agreed to.
+   */
+  var ready = MAPPED
+    ? MAPPED.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); })
+    : [];
   copyBtn.disabled = !ready.length;
   copyBtn.textContent = ready.length ? 'Copy ' + ready.length.toLocaleString() + '…' : 'Copy…';
-  copyBtn.title = ready.length ? 'Review and copy' : 'Map a destination first';
+  copyBtn.title = ready.length ? 'Review and copy'
+    : count ? 'Check the destinations in Map first'
+    : 'Nothing to copy';
 }
 
 function openMap() {
@@ -1171,9 +1288,55 @@ function applyMap() {
 var COPY_RUNNING = false;
 
 function copyReadyRows() {
-  var src = MAPPED || (RESULT ? RESULT.new : []);
+  var src = MAPPED || actionableRows();
   return src.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); });
 }
+
+/*
+ * Conflicts the user has decided to act on, turned into copy rows.
+ *
+ * Two ways to act, and the default never destroys anything:
+ *
+ *   alongside — write the Drive version next to the NAS one under a different
+ *               name. Both survive and a human reconciles later. This is the
+ *               default because a conflict means the tool does NOT know which
+ *               file is wanted.
+ *   replace   — write over the NAS file. Only ever from an explicit choice.
+ *
+ * This distinction cannot be left to the copy engine: robocopy runs with /XO
+ * and WILL overwrite when the Drive file is newer, while rsync runs with
+ * --ignore-existing and never overwrites at all. Leaving it implicit means the
+ * same plan does different things on Windows and on a Mac.
+ */
+function electedConflictRows() {
+  if (!RESULT || !RESULT.conflicts) return [];
+  return RESULT.conflicts
+    .filter(function (c) { return CONFLICT_PICKS[c.drivePath]; })
+    .map(function (c) {
+      var mode = CONFLICT_PICKS[c.drivePath];
+      var dest = c.proposedNas || c.nasPath;
+      return Object.assign({}, c, {
+        size: c.size || c.driveSize,
+        proposedNas: mode === 'replace' ? dest : alongsideName(dest),
+        mappedBy: (c.mappedBy || 'conflict') + (mode === 'replace' ? ' (replaces)' : ' (alongside)'),
+        conflictMode: mode,
+      });
+    });
+}
+
+/** `Report.docx` -> `Report (from Drive).docx`, extension preserved. */
+function alongsideName(p) {
+  var s = String(p);
+  var cut = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  var dir = cut >= 0 ? s.slice(0, cut + 1) : '';
+  var base = cut >= 0 ? s.slice(cut + 1) : s;
+  var dot = base.lastIndexOf('.');
+  return dot > 0
+    ? dir + base.slice(0, dot) + ' (from Drive)' + base.slice(dot)
+    : dir + base + ' (from Drive)';
+}
+
+var CONFLICT_PICKS = {};   // drivePath -> 'alongside' | 'replace'
 
 /** Skip anything already there at the same size; never overwrite by default. */
 function classifyAgainstDest(rows, existing) {
