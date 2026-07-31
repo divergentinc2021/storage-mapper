@@ -122,10 +122,27 @@ export function planGroups(rows, isAbsoluteDest, sep) {
     const srcDir = dirname(`${r.driveRoot}${sep}${r.drivePath.split('/').join(sep)}`);
     const dstDir = dirname(r.proposedNas.split('/').join(sep));
     const key = `${srcDir}|${dstDir}`;
-    if (!groups.has(key)) groups.set(key, { srcDir, dstDir, files: [], literal: [], bytes: 0 });
+    if (!groups.has(key)) {
+      groups.set(key, { srcDir, dstDir, files: [], literal: [], replace: [], bytes: 0 });
+    }
     const g = groups.get(key);
-    // Kept out of the argv entirely rather than escaped — see needsLiteralCopy.
-    if (needsLiteralCopy(r.name)) g.literal.push(r.name);
+    /*
+     * Three buckets, because they need three different guarantees.
+     *
+     * replace — the user picked "Replace the NAS file" on a conflict. This
+     *   CANNOT go through robocopy: the engine runs with /XO, so when the NAS
+     *   copy is the newer one — which is the usual reason a file differs — it
+     *   is excluded and the copy silently does nothing. The option said replace
+     *   and nothing was replaced. Overwriting is only ever done here, for rows
+     *   carrying an explicit per-file choice.
+     *
+     * literal — a name robocopy will not accept as an argument. Copied directly
+     *   and never overwritten.
+     *
+     * files — everything else, and the overwhelming majority.
+     */
+    if (r.conflictMode === 'replace') g.replace.push(r.name);
+    else if (needsLiteralCopy(r.name)) g.literal.push(r.name);
     else g.files.push(r.name);
     g.bytes += Number(r.size) || 0;
   }

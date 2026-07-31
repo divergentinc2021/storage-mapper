@@ -8,7 +8,7 @@
  *   - a .gdoc stub                                             → native, never copied
  *   - the same project under an old code name on a second NAS root → overlap
  */
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, utimesSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -373,6 +373,56 @@ await (async () => {
     assert.equal(again.ok, true);
     assert.equal(readFileSync(path.join(HDST, 'V3', '-X wing_Normal_v003.png'), 'utf8'),
       'ALREADY-ON-THE-NAS', 'the existing file was overwritten');
+  });
+
+  /*
+   * "Replace the NAS file" silently did nothing.
+   *
+   * The row still went through robocopy, which runs with /XO — exclude older.
+   * A conflict usually means the NAS copy is the NEWER one, so /XO excluded it:
+   *   Files : Total 1  Copied 0  Skipped 1
+   * The option said replace, the log said success, and the file never changed.
+   */
+  const RSRC = path.join(TMP, 'repsrc'), RDST = path.join(TMP, 'repdst');
+  w(path.join(RSRC, 'A', 'Resolution of Daniel - Hugos Work.txt'), 'DRIVE-VERSION');
+  w(path.join(RDST, 'A', 'Resolution of Daniel - Hugos Work.txt'), 'OLDER-NAS-VERSION-THAT-IS-LONGER');
+  // Make the destination NEWER, which is what /XO refuses to overwrite.
+  const future = new Date(Date.now() + 60_000);
+  utimesSync(path.join(RDST, 'A', 'Resolution of Daniel - Hugos Work.txt'), future, future);
+
+  const repRow = (mode) => ([{
+    drivePath: 'A/Resolution of Daniel - Hugos Work.txt',
+    name: 'Resolution of Daniel - Hugos Work.txt',
+    size: 13, driveRoot: RSRC, conflictMode: mode,
+    proposedNas: path.join(RDST, 'A', 'Resolution of Daniel - Hugos Work.txt'),
+  }]);
+
+  check('Replace actually replaces, even when the NAS copy is newer', async () => {
+    const r = await copier.run({ rows: repRow('replace'), dryRun: false }, () => {});
+    assert.equal(r.ok, true, `copy failed: ${JSON.stringify(r.results)}`);
+    assert.equal(
+      readFileSync(path.join(RDST, 'A', 'Resolution of Daniel - Hugos Work.txt'), 'utf8'),
+      'DRIVE-VERSION',
+      'the NAS file was not replaced — /XO skipped it again'
+    );
+  });
+
+  check('Replace writes nothing on a dry run', async () => {
+    const p = path.join(RDST, 'A', 'Resolution of Daniel - Hugos Work.txt');
+    writeFileSync(p, 'UNTOUCHED');
+    const r = await copier.run({ rows: repRow('replace'), dryRun: true }, () => {});
+    assert.equal(r.ok, true);
+    assert.equal(readFileSync(p, 'utf8'), 'UNTOUCHED', 'a dry run overwrote a file');
+  });
+
+  check('without Replace the newer NAS file is still left alone', async () => {
+    const p = path.join(RDST, 'A', 'Resolution of Daniel - Hugos Work.txt');
+    writeFileSync(p, 'NAS-WINS');
+    utimesSync(p, future, future);
+    const r = await copier.run({ rows: repRow(undefined), dryRun: false }, () => {});
+    assert.equal(r.ok, true);
+    assert.equal(readFileSync(p, 'utf8'), 'NAS-WINS',
+      'overwriting must need the explicit per-file choice');
   });
 
   check('a dry run still writes nothing for hyphen names', async () => {
@@ -987,6 +1037,82 @@ check('a converted file inside the Drive root is not ALSO copied as itself', asy
   assert.ok(sub, 'and it arrives as the stub substitution');
   assert.equal(sub.proposedNas, 'Z:/NAS/Proj/Plan.docx', 'landing where the stub belonged');
 });
+
+/*
+ * Built-in profiles. The risk is not writing them, it is writing them AGAIN —
+ * over an edit, or after they were deliberately deleted.
+ */
+await (async () => {
+  const require_ = createRequire(import.meta.url);
+  const profiles = require_(path.join(ROOT, 'electron', 'profiles.cjs'));
+  const builtins = require_(path.join(ROOT, 'electron', 'builtin-profiles.cjs'));
+  const userData = path.join(TMP, 'userdata');
+  mkdirSync(userData, { recursive: true });
+  const fakeApp = { getPath: () => userData };
+
+  const first = builtins.seed(fakeApp, profiles);
+  check('the built-in profiles are written on first run', () => {
+    assert.equal(first.seeded, builtins.BUILTINS.length);
+    const names = profiles.list(fakeApp).map((p) => p.name).sort();
+    assert.deepEqual(names, ['My Drive', 'ProjectsOnAllDrives', 'Shared drives']);
+  });
+
+  check('one of them is made the default so the app opens ready', () => {
+    const s = profiles.getSettings(fakeApp);
+    assert.ok(s.defaultProfile, 'no default was set');
+    assert.match(s.defaultProfile, /ProjectsOnAllDrives/);
+  });
+
+  check('ProjectsOnAllDrives carries every project tree, paired to the NAS', () => {
+    const p = profiles.list(fakeApp).find((x) => x.name === 'ProjectsOnAllDrives');
+    const full = profiles.load(fakeApp, p.file);
+    assert.equal(full.local.driveRoots.length, builtins.PROJECT_TREES.length);
+    assert.equal(full.local.nasRoots.length, builtins.PROJECT_TREES.length);
+    assert.ok(full.local.driveRoots.every((r) => r.startsWith('H:\\Shared drives\\UIZ - PROJECTS\\')));
+    assert.ok(full.local.nasRoots.every((r) => r.startsWith('Z:\\')));
+    assert.ok(full.local.convertedRoots.length, 'the converted folder must come preset');
+  });
+
+  check('seeding again changes nothing — edits are not overwritten', () => {
+    const p = profiles.list(fakeApp).find((x) => x.name === 'My Drive');
+    const edited = profiles.load(fakeApp, p.file);
+    edited.local.nasRoots = ['Z:\\SOMEWHERE ELSE'];
+    profiles.save(fakeApp, edited);
+
+    const again = builtins.seed(fakeApp, profiles);
+    assert.equal(again.seeded, 0, 'seeded a second time');
+    const after = profiles.load(fakeApp, p.file);
+    assert.deepEqual(after.local.nasRoots, ['Z:\\SOMEWHERE ELSE'], 'an edit was overwritten');
+  });
+
+  check('a built-in you delete stays deleted', () => {
+    const p = profiles.list(fakeApp).find((x) => x.name === 'Shared drives');
+    profiles.remove(fakeApp, p.file);
+    builtins.seed(fakeApp, profiles);
+    assert.ok(!profiles.list(fakeApp).some((x) => x.name === 'Shared drives'),
+      'a deleted profile came back');
+  });
+
+  check('convertedRoots survives a save/load round trip', () => {
+    const saved = profiles.save(fakeApp, {
+      name: 'RoundTrip',
+      shared: { aliases: [], map: [] },
+      local: { driveRoots: ['H:\\d'], nasRoots: ['Z:\\n'],
+               convertedRoots: ['H:\\My Drive\\_Converted for NAS'], manifestPath: null },
+    });
+    const back = profiles.load(fakeApp, saved.file);
+    assert.deepEqual(back.local.convertedRoots, ['H:\\My Drive\\_Converted for NAS'],
+      'the converted folder was dropped, so stubs silently stop resolving');
+  });
+
+  check('a profile written before convertedRoots existed still loads', () => {
+    const old = profiles.normalize({
+      name: 'Old', shared: { aliases: [], map: [] },
+      local: { driveRoots: ['H:\\d'], nasRoots: ['Z:\\n'], manifestPath: null },
+    });
+    assert.deepEqual(old.local.convertedRoots, []);
+  });
+})();
 
 check('isUnder does not treat a sibling with a shared prefix as inside', async () => {
   const wk = await import('../src/walk.mjs');

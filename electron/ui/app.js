@@ -203,7 +203,13 @@ function blankProfile(name) {
 
 function profileFromUi() {
   var p = PROFILE || blankProfile();
-  p.local = { driveRoots: DRIVE_ROOTS.slice(), nasRoots: NAS_ROOTS.slice(), manifestPath: MANIFEST };
+  // convertedRoots belongs here too. It was omitted, so pointing at
+  // _Converted for NAS was forgotten on every profile switch — and its absence
+  // is invisible: the stubs simply go back to being unresolved.
+  p.local = {
+    driveRoots: DRIVE_ROOTS.slice(), nasRoots: NAS_ROOTS.slice(),
+    convertedRoots: CONV_ROOTS.slice(), manifestPath: MANIFEST,
+  };
   p.shared = { aliases: MAPPING.aliases || [], map: MAPPING.map || [] };
   return p;
 }
@@ -217,6 +223,7 @@ function applyProfileToUi(p) {
   };
   DRIVE_ROOTS = ((PROFILE.local && PROFILE.local.driveRoots) || []).slice();
   NAS_ROOTS = ((PROFILE.local && PROFILE.local.nasRoots) || []).slice();
+  CONV_ROOTS = ((PROFILE.local && PROFILE.local.convertedRoots) || []).slice();
   MANIFEST = (PROFILE.local && PROFILE.local.manifestPath) || null;
   // NOT 'exact'. A stored manifest path says a file was chosen once, not that it
   // is usable — and claiming exact here is how a run that silently matched on

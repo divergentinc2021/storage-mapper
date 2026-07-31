@@ -10,6 +10,7 @@ const { fork } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const profiles = require('./profiles.cjs');
+const builtins = require('./builtin-profiles.cjs');
 const copier = require('./copy.cjs');
 const journal = require('./journal.cjs');
 
@@ -33,7 +34,11 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  // Before the window, so the first profiles-boot already sees them.
+  try { builtins.seed(app, profiles); } catch (e) { /* never block startup on this */ }
+  createWindow();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 

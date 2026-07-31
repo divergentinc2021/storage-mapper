@@ -72,6 +72,8 @@ async function run(opts, emit) {
      * copy must never do.
      */
     // On non-Windows the literal names go through rsync like everything else.
+    // Replace rows never do: rsync runs with --ignore-existing, which would drop
+    // them just as silently as /XO does.
     const engineFiles = IS_WIN ? g.files.length : g.files.length + (g.literal || []).length;
     const code = engineFiles === 0 ? 0 : await new Promise((resolve) => {
       let child;
@@ -97,44 +99,78 @@ async function run(opts, emit) {
     });
     current.child = null;
 
-    const verdict = IS_WIN ? src.classifyRobocopy(code) : src.classifyRsync(code);
+    let verdict = IS_WIN ? src.classifyRobocopy(code) : src.classifyRsync(code);
 
-    /*
-     * The names robocopy refuses to be given, copied one at a time. Never
-     * overwrites — matching /XO's promise the conservative way, since we cannot
-     * hand these to the engine that implements it.
+    /**
+     * Copy one file with Node, no engine involved.
+     * `overwrite` is only ever true for a row the user explicitly marked Replace.
      */
-    const literalFailed = [];
-    for (const name of (IS_WIN ? (g.literal || []) : [])) {
-      if (current.cancelled) break;
+    const directCopy = async (name, overwrite, why) => {
       const from = path.join(g.srcDir, name);
       const to = path.join(g.dstDir, name);
-      try {
-        if (opts.dryRun) {
-          emit({ type: 'log', line: `would copy (direct): ${name}` });
-          continue;
-        }
-        await fsp.mkdir(g.dstDir, { recursive: true });
-        // COPYFILE_EXCL: fails if the destination exists, so nothing is replaced.
-        await fsp.copyFile(from, to, fsConstants.COPYFILE_EXCL);
-        emit({ type: 'log', line: `copied (direct, name starts with "-"): ${name}` });
-      } catch (e) {
-        if (e && e.code === 'EEXIST') {
-          emit({ type: 'log', line: `already there, left alone: ${name}` });
-          continue;
-        }
-        literalFailed.push(`${name} — ${e.code || e.message}`);
-        emit({ type: 'log', line: `FAILED (direct): ${name} — ${e.code || e.message}` });
+      if (opts.dryRun) {
+        emit({ type: 'log', line: `would copy (${why}): ${name}` });
+        return null;
       }
+      try {
+        await fsp.mkdir(g.dstDir, { recursive: true });
+        await fsp.copyFile(from, to, overwrite ? 0 : fsConstants.COPYFILE_EXCL);
+        emit({ type: 'log', line: `${overwrite ? 'REPLACED' : 'copied'} (${why}): ${name}` });
+        return null;
+      } catch (e) {
+        if (!overwrite && e && e.code === 'EEXIST') {
+          emit({ type: 'log', line: `already there, left alone: ${name}` });
+          return null;
+        }
+        emit({ type: 'log', line: `FAILED (${why}): ${name} — ${e.code || e.message}` });
+        return `${name} — ${e.code || e.message}`;
+      }
+    };
+
+    const directFailed = [];
+    const push = (r) => { if (r) directFailed.push(r); };
+
+    /*
+     * A usage error means robocopy parsed nothing and copied nothing, so the
+     * whole group can be redone directly with no risk of doubling up. This is
+     * the general answer to awkward file names: rather than maintaining a list
+     * of characters robocopy dislikes and hoping it is complete, notice that it
+     * refused the command and route around it. Whatever the name was, it works.
+     */
+    if (IS_WIN && code === 16 && g.files.length) {
+      emit({ type: 'log', line:
+        `robocopy refused this folder (exit 16 — usually a file name it reads as a switch). ` +
+        `Copying its ${g.files.length} file(s) directly instead.` });
+      for (const name of g.files) {
+        if (current.cancelled) break;
+        push(await directCopy(name, false, 'fallback'));
+      }
+      // The engine's verdict no longer describes what happened here.
+      verdict = { ok: true, code, summary: `copied directly (robocopy refused the command line)` };
     }
-    if (literalFailed.length) {
-      verdict.ok = false;
-      verdict.summary = `${verdict.summary}; ${literalFailed.length} file(s) whose name ` +
-        `starts with "-" could not be copied directly`;
+
+    // Names robocopy will not accept as arguments. Never overwritten.
+    for (const name of (IS_WIN ? (g.literal || []) : [])) {
+      if (current.cancelled) break;
+      push(await directCopy(name, false, 'name starts with "-"'));
+    }
+
+    // Explicit per-file Replace. The only path in this app that overwrites.
+    for (const name of (g.replace || [])) {
+      if (current.cancelled) break;
+      push(await directCopy(name, true, 'you chose Replace'));
+    }
+
+    if (directFailed.length) {
+      verdict = {
+        ...verdict,
+        ok: false,
+        summary: `${verdict.summary}; ${directFailed.length} file(s) could not be copied directly`,
+      };
     }
 
     if (verdict.ok && !opts.dryRun) copiedBytes += g.bytes;
-    const fileCount = g.files.length + (g.literal || []).length;
+    const fileCount = g.files.length + (g.literal || []).length + (g.replace || []).length;
     results.push({ ...verdict, srcDir: g.srcDir, dstDir: g.dstDir, files: fileCount, bytes: g.bytes });
     emit({ type: 'group-done', index: i, total: groups.length, verdict });
   }

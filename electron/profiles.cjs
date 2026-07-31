@@ -74,6 +74,8 @@ function normalize(p, name) {
     local: {
       driveRoots: (p.local && p.local.driveRoots) || [],
       nasRoots: (p.local && p.local.nasRoots) || [],
+      // Defaults to [] so profiles written before this existed still load.
+      convertedRoots: (p.local && p.local.convertedRoots) || [],
       manifestPath: (p.local && p.local.manifestPath) || null,
     },
   };
@@ -190,6 +192,6 @@ function setSharedPath(app, p) {
 
 module.exports = {
   SCHEMA, empty, normalize, list, save, load, remove,
-  getSettings, setDefault, exportProfile, checkShared, markSharedApplied,
+  getSettings, setDefault, writeSettings, exportProfile, checkShared, markSharedApplied,
   setSharedPath, sharedHash,
 };
