@@ -54,6 +54,7 @@ const win = {
     scan: () => Promise.resolve(win.__scanResult),
     exportOptions: () => Promise.resolve({ hasRun: false, scanned: false, driveFiles: 0, newRows: 0, compared: false }),
     exportManifest: noop, verifyCopy: () => Promise.resolve({ ok: 0, missing: [], short: [] }),
+    verifyDest: (rows) => Promise.resolve(win.__destVerdicts || { verdicts: {}, checked: rows.length }),
     exportFailures: noop, inspectDest: () => Promise.resolve({}),
     preflightCopy: (rows) => Promise.resolve(win.__preflight || { ready: rows, blocked: [] }),
   },
@@ -64,7 +65,9 @@ const win = {
 
 const sandbox = { document: doc, window: win, console, setTimeout, Set, JSON, Math, Date };
 const fn = new Function(...Object.keys(sandbox), `${src}\n; return { get RESULT(){return RESULT}, set RESULT(v){RESULT=v},
-  syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest, clashingRoots, renderPaths,
+  syncStageButtons, copyReadyRows, isAbsoluteDest, classifyAgainstDest, applyDestVerdicts,
+  clashingRoots, renderPaths, verifyDuplicates, destForDrivePath,
+  get MAPPING(){return MAPPING}, set MAPPING(v){MAPPING=v},
   get MAPPED(){return MAPPED}, set MAPPED(v){MAPPED=v},
   get DRIVE_ROOTS(){return DRIVE_ROOTS}, set DRIVE_ROOTS(v){DRIVE_ROOTS=v},
   get NAS_ROOTS(){return NAS_ROOTS}, set NAS_ROOTS(v){NAS_ROOTS=v},
@@ -408,6 +411,122 @@ await acheck('a run still works after #emptyState has been destroyed', async () 
   assert.equal(doc.getElementById('btnScan').disabled, false, 'Scan must come back');
   assert.equal(doc.getElementById('btnCompare').disabled, false, 'Compare must come back');
   assert.equal(api.SCANNED, true, 'and the scan itself must still have worked');
+});
+
+/*
+ * The case the whole change exists for: a file at the destination with the same
+ * size but different content. It used to be called identical and skipped, so it
+ * never reached the NAS and nothing said so.
+ */
+check('a same-size impostor at the destination is caught and re-selected', () => {
+  const rows = [
+    { name: 'Plan.docx', proposedNas: 'Z:/n/Plan.docx', size: 100, md5: 'aaa' },
+    { name: 'Real.docx', proposedNas: 'Z:/n/Real.docx', size: 100, md5: 'bbb' },
+  ];
+  const classified = api.classifyAgainstDest(rows, {
+    'z:/n/plan.docx': { size: 100 },
+    'z:/n/real.docx': { size: 100 },
+  });
+  assert.deepEqual(classified.map((r) => r.state), ['identical', 'identical']);
+  assert.deepEqual(classified.map((r) => r.selected), [false, false], 'both skipped on size alone');
+  assert.deepEqual(classified.map((r) => r.proof), ['size', 'size'], 'marked as presumption');
+
+  const verified = api.applyDestVerdicts(classified, {
+    'Z:/n/Plan.docx': 'differs',   // same size, different bytes
+    'Z:/n/Real.docx': 'same',
+  });
+  assert.equal(verified[0].state, 'different', 'the impostor is no longer called identical');
+  assert.equal(verified[0].selected, true, 'and it gets copied');
+  assert.equal(verified[0].proof, 'md5');
+  assert.equal(verified[1].state, 'identical', 'the genuine duplicate stays skipped');
+  assert.equal(verified[1].selected, false);
+  assert.equal(verified[1].proof, 'md5', 'and is now proven, not assumed');
+});
+
+/*
+ * The reported symptom: Compare said everything was already on the NAS, so New
+ * was 0 and Map was dead. If some of those matches are wrong, verifying has to
+ * hand the files back as copyable work — otherwise the check is a read-only
+ * opinion and Map stays grey.
+ */
+check('a duplicate that is not really a duplicate becomes copyable, and lights Map', async () => {
+  const realAlert = win.alert;
+  win.alert = () => {};
+  try {
+    api.MAPPING = { nasRoots: [], driveRoots: [], aliases: [], map: [] };
+    api.NAS_ROOTS = ['Z:/n'];
+    api.RESULT = {
+      duplicates: [
+        { drivePath: 'P/Impostor.docx', nasPath: 'Z:/n/Impostor.docx', name: 'Impostor.docx',
+          size: 100, tier: 'size+name', md5: 'aaa', driveRoot: 'H:/d', driveAbs: 'H:/d/P/Impostor.docx' },
+        { drivePath: 'P/Genuine.docx', nasPath: 'Z:/n/Genuine.docx', name: 'Genuine.docx',
+          size: 100, tier: 'size+name', md5: 'bbb', driveRoot: 'H:/d', driveAbs: 'H:/d/P/Genuine.docx' },
+      ],
+      new: [], conflicts: [], natives: [], errors: [], stats: {},
+    };
+    api.MAPPED = null;
+    api.SCANNED = false;
+    api.syncStageButtons();
+    assert.equal(doc.getElementById('btnMapTop').disabled, true, 'Map starts disabled — nothing new');
+
+    win.__destVerdicts = { verdicts: { 'Z:/n/Impostor.docx': 'differs', 'Z:/n/Genuine.docx': 'same' } };
+    await api.verifyDuplicates();
+
+    assert.equal(api.RESULT.duplicates.length, 1, 'the impostor left the duplicates list');
+    assert.equal(api.RESULT.duplicates[0].name, 'Genuine.docx');
+    assert.equal(api.RESULT.duplicates[0].verified, 'same', 'the genuine one is now proven');
+
+    assert.equal(api.RESULT.new.length, 1, 'and became new work');
+    const rescued = api.RESULT.new[0];
+    assert.equal(rescued.name, 'Impostor.docx');
+    assert.ok(rescued.driveAbs, 'a rescued row must carry its source or it cannot be copied');
+    assert.ok(rescued.proposedNas, 'and a destination');
+    assert.ok(api.isAbsoluteDest(rescued.proposedNas), 'an absolute one, or the plan skips it');
+    assert.equal(doc.getElementById('btnMapTop').disabled, false, 'Map is live again');
+  } finally {
+    win.alert = realAlert;
+  }
+});
+
+check('verifying does not disturb matches it could not read', async () => {
+  const realAlert = win.alert;
+  win.alert = () => {};
+  try {
+    api.NAS_ROOTS = ['Z:/n'];
+    api.RESULT = {
+      duplicates: [{ drivePath: 'P/A.docx', nasPath: 'Z:/n/A.docx', name: 'A.docx', size: 1,
+                     tier: 'size+name', md5: 'aaa', driveRoot: 'H:/d', driveAbs: 'H:/d/P/A.docx' }],
+      new: [], conflicts: [], natives: [], errors: [], stats: {},
+    };
+    win.__destVerdicts = { verdicts: { 'Z:/n/A.docx': 'unreadable' } };
+    await api.verifyDuplicates();
+    assert.equal(api.RESULT.duplicates.length, 1, 'still treated as already there');
+    assert.equal(api.RESULT.new.length, 0, 'an unreadable NAS file is not evidence of a difference');
+    assert.equal(api.RESULT.duplicates[0].verified, 'unreadable', 'but the doubt is recorded');
+  } finally {
+    win.alert = realAlert;
+  }
+});
+
+check('a destination that cannot be read is left skipped, and says so', () => {
+  const classified = api.classifyAgainstDest(
+    [{ name: 'A.bin', proposedNas: 'Z:/n/A.bin', size: 10, md5: 'aaa' }],
+    { 'z:/n/a.bin': { size: 10 } }
+  );
+  const v = api.applyDestVerdicts(classified, { 'Z:/n/A.bin': 'unreadable' });
+  assert.equal(v[0].state, 'identical');
+  assert.equal(v[0].selected, false, 'an unreadable destination is not a reason to overwrite');
+  assert.equal(v[0].proof, 'unreadable', 'and the uncertainty is recorded');
+});
+
+check('rows without an md5 are left exactly as the size check found them', () => {
+  const classified = api.classifyAgainstDest(
+    [{ name: 'A.bin', proposedNas: 'Z:/n/A.bin', size: 10 }],
+    { 'z:/n/a.bin': { size: 10 } }
+  );
+  const v = api.applyDestVerdicts(classified, {});
+  assert.equal(v[0].state, 'identical');
+  assert.equal(v[0].proof, 'size', 'no manifest md5 means the claim stays a presumption');
 });
 
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);

@@ -19,7 +19,7 @@ import { match, nasInternalOverlap } from './match.mjs';
 import { writeAll, writeCopyPlan, fmtBytes } from './report.mjs';
 
 function parseArgs(argv) {
-  const a = { nas: [], drive: [], out: 'out', manifest: null, config: null };
+  const a = { nas: [], drive: [], out: 'out', manifest: null, config: null, exact: false };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i];
     const v = () => argv[++i];
@@ -28,6 +28,7 @@ function parseArgs(argv) {
     else if (k === '--manifest') a.manifest = v();
     else if (k === '--config') a.config = v();
     else if (k === '--out') a.out = v();
+    else if (k === '--exact') a.exact = true;
     else if (k === '-h' || k === '--help') a.help = true;
     else throw new Error(`unknown argument: ${k}`);
   }
@@ -44,6 +45,11 @@ storage-mapper — plan a Google Drive → QNAP migration without duplicating an
   --drive <dir>      extra Drive-mount root (repeatable; adds to config.driveRoots)
   --manifest <csv>   Drive API manifest with an md5 column (strongly recommended)
   --out <dir>        output directory (default: out)
+  --exact            verify duplicates by reading NAS bytes (needs --manifest).
+                     Slow and usually unnecessary: the verdict for most files is
+                     "not on the NAS", which no hash is needed to reach. The
+                     desktop app leaves this off and asks the exact question at
+                     the copy stage instead, where the set is small.
 
 Nothing is copied, moved or deleted. Output is duplicates.csv, new.csv,
 natives.csv, conflicts.csv, nas-internal-overlap.csv, summary.json and a
@@ -117,7 +123,7 @@ async function main() {
 
   console.log('\nMatching…');
   const result = await match({
-    driveFiles, nasFiles, manifest, mapping,
+    driveFiles, nasFiles, manifest, mapping, exact: args.exact,
     // Padded, or the tail of a longer previous line survives the carriage return.
     onProgress: (p) => process.stdout.write(
       ('\r  ' + `${p.done}/${p.total} compared, ${p.hashed} NAS files hashed` +

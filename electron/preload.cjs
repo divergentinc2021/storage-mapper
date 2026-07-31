@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('mapper', {
   exportOptions: () => ipcRenderer.invoke('export-options'),
   exportManifest: () => ipcRenderer.invoke('export-manifest'),
   verifyCopy: (rows) => ipcRenderer.invoke('verify-copy', rows),
+  verifyDest: (rows) => ipcRenderer.invoke('verify-dest', rows),
   preflightCopy: (rows) => ipcRenderer.invoke('preflight-copy', rows),
   exportFailures: (rows) => ipcRenderer.invoke('export-failures', rows),
   appInfo: () => ipcRenderer.invoke('app-info'),

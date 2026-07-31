@@ -17,9 +17,24 @@ import { md5File } from './walk.mjs';
 import { classifyNative, isNativeExt } from './natives.mjs';
 import { indexConverted, resolveConverted, substitutionRow } from './converted.mjs';
 
+/**
+ * `exact` decides whether NAS bytes are read here.
+ *
+ * Off by default, which is what the desktop app uses. Comparing is TRIAGE over
+ * the whole Drive — tens of thousands of files against a share — and its answer
+ * for all but a handful of them is "not there, copy it". Reading the NAS to
+ * reach that answer costs hours and changes almost nothing, because the verdict
+ * that a file is MISSING needs no hash.
+ *
+ * The exact question is asked later instead, on the few files whose destination
+ * already exists, where being wrong actually stops a copy. See verify-dest in
+ * the main process.
+ *
+ * The CLI keeps `--exact` for a full byte-level pass when that is what you want.
+ */
 export async function match({
   driveFiles, nasFiles, manifest, mapping, onProgress,
-  convertedFiles = [], sep = '/',
+  convertedFiles = [], sep = '/', exact = false,
 }) {
   /*
    * Files produced by the Explorer's Convert step. When one exists for a native
@@ -134,7 +149,7 @@ export async function match({
 
     let hit = null, tier = null;
     if (candidates.length) {
-      if (driveMd5) {
+      if (driveMd5 && exact) {
         /*
          * Same-name candidates first. Every candidate here already has the
          * right size, and the loop stops at the first md5 that matches — so
@@ -157,9 +172,14 @@ export async function match({
       }
       if (!hit) {
         const byName = candidates.find((c) => c.baseLower === f.baseLower);
-        if (byName) { hit = byName; tier = driveMd5 ? 'size+name (md5 differed)' : 'size+name'; }
+        // "md5 differed" may only be claimed when an md5 was actually computed.
+        // Having one in the manifest is not the same as having checked it.
+        if (byName) {
+          hit = byName;
+          tier = (driveMd5 && exact) ? 'size+name (md5 differed)' : 'size+name';
+        }
       }
-      if (!hit && candidates.length === 1 && !driveMd5) {
+      if (!hit && candidates.length === 1 && !(driveMd5 && exact)) {
         hit = candidates[0]; tier = 'size only (weak)';
       }
     }
@@ -178,6 +198,14 @@ export async function match({
       out.duplicates.push({
         drivePath: f.rel, nasPath: hit.abs, name: f.base,
         size: f.size, tier, md5: driveMd5 || '',
+        /*
+         * The source, carried on a row that by definition is NOT going to be
+         * copied. If verifying overturns the match, the file becomes copyable
+         * and needs a source path — without these it would be rescued into a
+         * row the copy plan has to skip, which is a worse outcome than not
+         * having checked.
+         */
+        driveRoot: f.root, driveAbs: f.abs,
       });
       continue;
     }
@@ -197,6 +225,13 @@ export async function match({
       // The root is needed to rebuild an absolute source path in the copy plan.
       driveRoot: f.root, driveAbs: f.abs,
       proposedNas: dest ? dest.nas : '', mappedBy: dest ? dest.rule : '(unmapped)',
+      /*
+       * Carried, not used here. Costs one map lookup that already happened, and
+       * it is what lets the copy stage ask the exact question — is the file
+       * already sitting at the destination the SAME file — without a manifest
+       * being reloaded or the Drive being walked again.
+       */
+      md5: driveMd5 || '',
     });
   }
 

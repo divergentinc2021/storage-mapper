@@ -379,6 +379,69 @@ ipcMain.handle('preflight-copy', async (_e, rows) => {
   return { ready, blocked };
 });
 
+/*
+ * The exact check, moved here from the comparison.
+ *
+ * A file whose destination already holds something of the SAME SIZE was being
+ * called identical and dropped from the plan on that basis alone. Size is not
+ * identity — a re-rendered export, a re-saved document, a truncated transfer
+ * can all land on the same byte count — and this is the one decision in the
+ * whole tool where being wrong means a file silently never arrives.
+ *
+ * It belongs here rather than in the comparison because only here is the set
+ * small: comparison asks about the whole Drive and answers "not there" for
+ * nearly all of it, which needs no hash. This asks only about files that are
+ * already at their destination, and only when the manifest gave us something to
+ * check them against.
+ *
+ * Reads the DESTINATION, never the Drive source. Drive for Desktop would
+ * materialise every file to satisfy a read, turning a verification pass into a
+ * full download.
+ */
+const { createHash } = require('node:crypto');
+
+function md5OfFile(abs) {
+  return new Promise((resolve) => {
+    const h = createHash('md5');
+    const s = fs.createReadStream(abs);
+    s.on('data', (d) => h.update(d));
+    s.on('end', () => resolve(h.digest('hex')));
+    s.on('error', () => resolve(null));   // unreadable — caller keeps the size verdict
+  });
+}
+
+/*
+ * Reads `verifyPath` when given, otherwise the copy destination. The two
+ * callers ask the same question of different files: the copy review asks about
+ * the file already sitting where a copy would land; the comparison asks about
+ * the NAS file it matched a Drive file to. Both are decisions NOT to copy, and
+ * both were being made on size alone.
+ */
+ipcMain.handle('verify-dest', async (_e, rows) => {
+  const pathOf = (r) => r.verifyPath || r.proposedNas;
+  const list = (rows || []).filter((r) => r && pathOf(r) && r.md5);
+  const out = {};
+  let bytes = 0;
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i];
+    if (win) {
+      win.webContents.send('copy-event', {
+        type: 'verify', done: i, total: list.length, name: r.name || '',
+      });
+    }
+    const got = await md5OfFile(pathOf(r));
+    bytes += Number(r.size) || 0;
+    // null => could not read it; say so rather than guessing either way.
+    out[pathOf(r)] = got === null ? 'unreadable' : (got === r.md5 ? 'same' : 'differs');
+  }
+  if (win) {
+    win.webContents.send('copy-event', {
+      type: 'verify', done: list.length, total: list.length, name: '',
+    });
+  }
+  return { verdicts: out, checked: list.length, bytes };
+});
+
 ipcMain.handle('verify-copy', async (_e, rows) => {
   const missing = [], short = [], ok = [];
   for (const row of rows || []) {

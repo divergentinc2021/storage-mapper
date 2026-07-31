@@ -692,19 +692,142 @@ function droppedNote() {
     }).join('<br>') + '</div>';
 }
 
+/**
+ * Check the skip decisions.
+ *
+ * A duplicate that turns out to be a different file is not a duplicate: it was
+ * never on the NAS, so it moves into the new list and becomes copyable. That is
+ * the point of doing this at all — a wrong "already there" is the only verdict
+ * in the tool that loses a file silently, and it is also what leaves Map greyed
+ * out with nothing to do.
+ *
+ * Reads the NAS side only. The Drive side has its md5 from the manifest, and
+ * reading it would make Drive for Desktop materialise the whole mount.
+ */
+async function verifyDuplicates() {
+  var rows = RESULT.duplicates.filter(function (r) { return r.md5 && r.nasPath; });
+  if (!rows.length) return;
+
+  $('bar').hidden = false;
+  $('barFill').style.width = '5%';
+  $('barText').textContent = 'Verifying ' + rows.length.toLocaleString() + ' matches…';
+
+  var res;
+  try {
+    res = await window.mapper.verifyDest(rows.map(function (r) {
+      return { verifyPath: r.nasPath, md5: r.md5, size: r.size, name: r.name };
+    }));
+  } catch (e) {
+    res = null;
+  } finally {
+    $('bar').hidden = true;
+  }
+  if (!res) return;
+
+  var v = res.verdicts || {};
+  var moved = [];
+  RESULT.duplicates = RESULT.duplicates.filter(function (r) {
+    var verdict = v[r.nasPath];
+    if (verdict === 'differs') {
+      // Not the same file. Put it back where it belongs, with a destination so
+      // it can actually be copied rather than just re-flagged.
+      var dest = destForDrivePath(r.drivePath);
+      moved.push({
+        drivePath: r.drivePath, name: r.name, size: r.size, md5: r.md5,
+        driveRoot: r.driveRoot || '', driveAbs: r.driveAbs || '',
+        proposedNas: dest ? dest.nas : '', mappedBy: dest ? dest.rule : '(unmapped)',
+        wasCalledDuplicate: r.nasPath,
+      });
+      return false;
+    }
+    if (verdict) r.verified = verdict === 'same' ? 'same' : 'unreadable';
+    return true;
+  });
+
+  if (moved.length) {
+    RESULT.new = RESULT.new.concat(moved);
+    MAPPED = null;   // the plan predates these rows
+  }
+  renderCounts();
+  syncStageButtons();
+  renderTab();
+
+  if (moved.length) {
+    window.alert(moved.length + ' file(s) matched on name and size but are NOT the same file.\n\n' +
+      'They were going to be skipped. They have been moved to New so they can be copied.');
+  }
+}
+
+/**
+ * Re-derive a destination for a row that has just become copyable. Uses the
+ * same mapping the comparison used, so a rescued file lands where it would have
+ * landed had it been called new in the first place.
+ */
+function destForDrivePath(drivePath) {
+  var rule = (MAPPING.map || []).find(function (x) {
+    return x.drive && String(drivePath).indexOf(x.drive) === 0;
+  });
+  if (rule) {
+    var tail = String(drivePath).slice(rule.drive.length).replace(/^[\\/]+/, '');
+    return { nas: joinPath(rule.nas, tail), rule: rule.drive + ' → ' + rule.nas };
+  }
+  if (NAS_ROOTS.length === 1) {
+    return { nas: joinPath(NAS_ROOTS[0], drivePath), rule: 'mirror' };
+  }
+  return null;
+}
+
+function joinPath(a, b) {
+  var sep = String(a).indexOf('\\') !== -1 ? '\\' : '/';
+  return String(a).replace(/[\\/]+$/, '') + sep + String(b).split('/').join(sep);
+}
+
 function renderTab() {
   var m = $('main');
   if (!RESULT) return;
 
   if (TAB === 'duplicates') {
-    m.innerHTML = droppedNote() + table(['Drive file', 'Already on NAS at', 'Size', 'Matched by'],
+    /*
+     * Every row here is a decision NOT to copy something, and on the fast path
+     * that decision rests on a name and a byte count. This is also why Map goes
+     * grey: a file called a duplicate never reaches the new list. So the check
+     * is offered exactly where the claim is made, on the files it is made about.
+     */
+    var checkable = RESULT.duplicates.filter(function (r) { return r.md5 && r.nasPath; });
+    var unproven = RESULT.duplicates.filter(function (r) {
+      return r.verified !== 'same' && r.tier && r.tier.indexOf('md5') === -1;
+    });
+    m.innerHTML = droppedNote() +
+      (RESULT.duplicates.length
+        ? '<div class="note" style="display:flex;align-items:center;gap:10px">' +
+            '<span style="flex:1">' +
+              (unproven.length
+                ? '<b>' + unproven.length.toLocaleString() + '</b> of these are matched on name and ' +
+                  'size only — not verified. Each one is a file that will NOT be copied.' +
+                  (checkable.length
+                    ? ''
+                    : ' <i>Load a Drive manifest to be able to check them.</i>')
+                : 'Every match here was verified byte for byte.') +
+            '</span>' +
+            (checkable.length
+              ? '<button class="btn" id="btnVerifyDups">Verify ' +
+                checkable.length.toLocaleString() + ' against the manifest…</button>'
+              : '') +
+          '</div>'
+        : '') +
+      table(['Drive file', 'Already on NAS at', 'Size', 'Matched by'],
       RESULT.duplicates, function (r) {
-        var weak = r.tier && r.tier.indexOf('md5') === -1;
+        var weak = r.tier && r.tier.indexOf('md5') === -1 && r.verified !== 'same';
+        var label = r.verified === 'same' ? 'verified byte for byte'
+          : r.verified === 'unreadable' ? r.tier + ' — could not read to verify'
+          : r.tier;
         return '<tr><td class="path">' + esc(r.drivePath) + '</td>' +
           '<td class="path">' + esc(r.nasPath) + '</td>' +
           '<td class="num">' + fmtBytes(r.size) + '</td>' +
-          '<td><span class="tier ' + (weak ? 'weak' : 'md5') + '">' + esc(r.tier) + '</span></td></tr>';
+          '<td><span class="tier ' + (weak ? 'weak' : 'md5') + '">' + esc(label) + '</span></td></tr>';
       });
+    var vb = $('btnVerifyDups');
+    if (vb) vb.addEventListener('click', verifyDuplicates);
   } else if (TAB === 'new') {
     var ready = RESULT.new.filter(function (r) { return r.proposedNas && isAbsoluteDest(r.proposedNas); });
     var readyBytes = ready.reduce(function (a, r) { return a + r.size; }, 0);
@@ -1059,9 +1182,40 @@ function classifyAgainstDest(rows, existing) {
     var hit = get(r.proposedNas);
     if (!hit) return Object.assign({}, r, { state: 'new', existingSize: null, selected: true });
     if (Number(hit.size) === Number(r.size)) {
-      return Object.assign({}, r, { state: 'identical', existingSize: hit.size, selected: false });
+      /*
+       * Same size is a PRESUMPTION, not a verdict, so it is marked as one.
+       * applyDestVerdicts upgrades it to proven, or overturns it, when the
+       * manifest gave us an md5 to check against.
+       */
+      return Object.assign({}, r, {
+        state: 'identical', existingSize: hit.size, selected: false, proof: 'size',
+      });
     }
     return Object.assign({}, r, { state: 'different', existingSize: hit.size, selected: false });
+  });
+}
+
+/**
+ * Fold the md5 verdicts back in.
+ *
+ * A file the size check called identical but the hash says differs is the case
+ * this whole step exists for: it would have been skipped, silently, and never
+ * reached the NAS. It is selected for copying, because the Drive copy is the
+ * one the comparison was asked about.
+ */
+function applyDestVerdicts(rows, verdicts) {
+  var v = verdicts || {};
+  return rows.map(function (r) {
+    var verdict = v[r.proposedNas];
+    if (!verdict || r.state !== 'identical') return r;
+    if (verdict === 'same') return Object.assign({}, r, { proof: 'md5' });
+    if (verdict === 'differs') {
+      return Object.assign({}, r, {
+        state: 'different', proof: 'md5', selected: true,
+        note: 'same size, different content',
+      });
+    }
+    return Object.assign({}, r, { proof: 'unreadable' });
   });
 }
 
@@ -1071,10 +1225,33 @@ function renderCopyReview() {
   var sel = COPY_ROWS.filter(function (r) { return r.selected; });
   var bytes = sel.reduce(function (a, r) { return a + r.size; }, 0);
 
+  /*
+   * Say which of these were PROVEN and which were assumed. "Already there" on a
+   * size match and "already there, byte for byte" are different claims, and the
+   * user is deciding whether to skip a file on the strength of one of them.
+   */
+  var proven = COPY_ROWS.filter(function (r) { return r.proof === 'md5'; }).length;
+  var overturned = COPY_ROWS.filter(function (r) {
+    return r.state === 'different' && r.proof === 'md5';
+  }).length;
+  var unread = COPY_ROWS.filter(function (r) { return r.proof === 'unreadable'; }).length;
+
   $('copyHint').innerHTML =
     '<b>' + counts.new + '</b> not on the NAS · ' +
     '<b>' + counts.identical + '</b> already there at the same size · ' +
-    '<b>' + counts.different + '</b> there but a different size.';
+    '<b>' + counts.different + '</b> there but different.' +
+    (proven
+      ? ' <span style="color:var(--muted)">' + proven +
+        ' checked byte for byte against the manifest.</span>'
+      : '') +
+    (overturned
+      ? ' <b style="color:var(--warn,#b45309)">' + overturned +
+        ' matched on size but are NOT the same file — selected for copying.</b>'
+      : '') +
+    (unread
+      ? ' <span style="color:var(--muted)">' + unread +
+        ' could not be read to check; left skipped.</span>'
+      : '');
 
   $('copyLog').innerHTML =
     '<div class="selbar" style="padding:6px 10px">' +
@@ -1086,7 +1263,13 @@ function renderCopyReview() {
     COPY_ROWS.slice(0, 600).map(function (r, i) {
       return '<div class="filerow">' +
         '<input type="checkbox" data-i="' + i + '"' + (r.selected ? ' checked' : '') +
-        (r.state === 'identical' ? ' title="already on the NAS at the same size"' : '') + '>' +
+        (r.state === 'identical'
+          ? ' title="' + (r.proof === 'md5'
+              ? 'already on the NAS — verified byte for byte'
+              : r.proof === 'unreadable'
+                ? 'already there at the same size; could not be read to verify'
+                : 'already on the NAS at the same size (not verified)') + '"'
+          : r.note ? ' title="' + esc(r.note) + '"' : '') + '>' +
         '<span class="statetag ' + r.state + '">' + r.state + '</span>' +
         '<span class="nm">' + esc(r.name) + '<small>→ ' + esc(r.proposedNas) + '</small></span>' +
         '<span class="sz">' + fmtBytes(r.size) +
@@ -1128,6 +1311,23 @@ async function openCopy() {
   // that was never part of the comparison.
   var existing = await window.mapper.inspectDest(rows.map(function (r) { return r.proposedNas; }));
   COPY_ROWS = classifyAgainstDest(rows, existing || {});
+
+  /*
+   * The exact check, on the only files it can change anything for: the ones
+   * already sitting at their destination at the same size, which are about to
+   * be dropped from the plan on that basis. Everything else is either missing
+   * (copy it) or a different size (already flagged), and no hash alters either.
+   *
+   * This is why the comparison no longer reads the NAS. Same question, asked
+   * where the set is small and the answer decides something.
+   */
+  var toVerify = COPY_ROWS.filter(function (r) { return r.state === 'identical' && r.md5; });
+  if (toVerify.length) {
+    $('copyHint').textContent =
+      'Checking the ' + toVerify.length + ' file(s) already at the destination are the same file…';
+    var dv = await window.mapper.verifyDest(toVerify);
+    COPY_ROWS = applyDestVerdicts(COPY_ROWS, dv && dv.verdicts);
+  }
 
   /*
    * Prove every source is readable before offering to copy it. Anything that

@@ -84,11 +84,14 @@ w(cfg, JSON.stringify({
 
 // ---- run ------------------------------------------------------------------
 const OUT = path.join(TMP, 'out');
+// --exact, because the verdicts below (md5 tiers, renamed-file detection,
+// same-size-different-content conflicts) are precisely what reading NAS bytes
+// buys you. The default is checked separately at the end of this file.
 execFileSync(process.execPath, [path.join(ROOT, 'src', 'index.mjs'),
-  '--config', cfg, '--manifest', manifestCsv, '--out', OUT], { stdio: 'pipe' });
+  '--config', cfg, '--manifest', manifestCsv, '--out', OUT, '--exact'], { stdio: 'pipe' });
 
-const csv = (f) => {
-  const lines = readFileSync(path.join(OUT, f), 'utf8').trim().split('\n');
+const csvIn = (dir, f) => {
+  const lines = readFileSync(path.join(dir, f), 'utf8').trim().split('\n');
   const head = lines[0].split(',');
   return lines.slice(1).filter(Boolean).map((l) => {
     // fixtures contain no quoted commas, so a plain split is sufficient here
@@ -96,6 +99,7 @@ const csv = (f) => {
     return Object.fromEntries(head.map((h, i) => [h, cells[i]]));
   });
 };
+const csv = (f) => csvIn(OUT, f);
 
 const dups = csv('duplicates.csv');
 const news = csv('new.csv');
@@ -750,6 +754,67 @@ check('a slow hash still reports, and names the file it is reading', async () =>
   assert.equal(typeof ticks[0].done, 'number', 'progress is an object, not positional');
 });
 
+/*
+ * The exact question moved to the copy stage. Comparing must therefore not read
+ * the NAS at all, and must not claim it checked anything.
+ */
+check('comparing reads no NAS bytes, even with a manifest full of md5s', async () => {
+  const m = await import('../src/match.mjs');
+  const dir = path.join(TMP, 'noread');
+  const abs = path.join(dir, 'Same.bin');
+  w(abs, C.identical);
+  const size = C.identical.length;
+
+  const r = await m.match({
+    driveFiles: [{ abs: 'H:/d/Same.bin', rel: 'Same.bin', root: 'H:/d', base: 'Same.bin',
+                   baseLower: 'same.bin', ext: '.bin', size }],
+    nasFiles: [{ abs, rel: 'Same.bin', root: dir, base: 'Same.bin', baseLower: 'same.bin',
+                 ext: '.bin', size }],
+    manifest: { byId: new Map([['1', { name: 'Same.bin', size, md5: md5(C.identical) }]]),
+                byMd5: new Map(), bySize: new Map(), count: 1, withMd5: 1 },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+  });
+  assert.equal(r.stats.hashedFiles, 0, 'read the NAS during a plain comparison');
+  assert.equal(r.duplicates.length, 1);
+  assert.equal(r.duplicates[0].tier, 'size+name', 'must not claim an md5 tier it did not earn');
+});
+
+check('--exact still does the byte-level comparison', async () => {
+  const m = await import('../src/match.mjs');
+  const dir = path.join(TMP, 'exact');
+  const abs = path.join(dir, 'Same.bin');
+  w(abs, C.identical);
+  const size = C.identical.length;
+
+  const r = await m.match({
+    exact: true,
+    driveFiles: [{ abs: 'H:/d/Same.bin', rel: 'Same.bin', root: 'H:/d', base: 'Same.bin',
+                   baseLower: 'same.bin', ext: '.bin', size }],
+    nasFiles: [{ abs, rel: 'Same.bin', root: dir, base: 'Same.bin', baseLower: 'same.bin',
+                 ext: '.bin', size }],
+    manifest: { byId: new Map([['1', { name: 'Same.bin', size, md5: md5(C.identical) }]]),
+                byMd5: new Map(), bySize: new Map(), count: 1, withMd5: 1 },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+  });
+  assert.equal(r.stats.hashedFiles, 1);
+  assert.equal(r.duplicates[0].tier, 'md5');
+});
+
+check('a new row carries its md5 so the copy stage can check it', async () => {
+  const m = await import('../src/match.mjs');
+  const size = C.brandNew.length;
+  const r = await m.match({
+    driveFiles: [{ abs: 'H:/d/New.bin', rel: 'New.bin', root: 'H:/d', base: 'New.bin',
+                   baseLower: 'new.bin', ext: '.bin', size }],
+    nasFiles: [],
+    manifest: { byId: new Map([['1', { name: 'New.bin', size, md5: md5(C.brandNew) }]]),
+                byMd5: new Map(), bySize: new Map(), count: 1, withMd5: 1 },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+  });
+  assert.equal(r.new.length, 1);
+  assert.equal(r.new[0].md5, md5(C.brandNew), 'md5 must reach the copy plan');
+});
+
 check('a colliding size does not drag the whole bucket through md5', async () => {
   const m = await import('../src/match.mjs');
   const dir = path.join(TMP, 'bucket');
@@ -781,6 +846,48 @@ check('a colliding size does not drag the whole bucket through md5', async () =>
   assert.equal(r.duplicates[0].tier, 'md5');
   assert.equal(r.stats.hashedFiles, 1,
     `hashed ${r.stats.hashedFiles} files to find one match — should be 1`);
+});
+
+/*
+ * What the DEFAULT (no --exact) costs, stated as tests rather than left for
+ * someone to discover on a migration.
+ *
+ * Both losses are one-directional and both are recoverable at the copy stage,
+ * which is why the desktop app takes this trade: comparing stays fast, and the
+ * exact question is asked where it decides something.
+ */
+const OUT_FAST = path.join(TMP, 'out-fast');
+execFileSync(process.execPath, [path.join(ROOT, 'src', 'index.mjs'),
+  '--config', cfg, '--manifest', manifestCsv, '--out', OUT_FAST], { stdio: 'pipe' });
+const fastDups = csvIn(OUT_FAST, 'duplicates.csv');
+
+check('without --exact nothing on the NAS is read', () => {
+  const s = JSON.parse(readFileSync(path.join(OUT_FAST, 'summary.json'), 'utf8'));
+  assert.equal(s.stats.hashedFiles, 0);
+});
+
+check('without --exact a duplicate is claimed on size+name, and says so', () => {
+  const r = fastDups.find((d) => d.name === 'scan_001.mp4');
+  assert.ok(r, 'still found');
+  assert.equal(r.tier, 'size+name', 'the tier must not overstate the evidence');
+});
+
+check('KNOWN COST: without --exact, same size + same name hides a conflict', () => {
+  // report.mp4 has matching name and size but different bytes. --exact calls it
+  // a conflict; the fast path cannot tell and calls it a duplicate, so it is
+  // SKIPPED. This is the gap the copy-stage verification exists to close, and
+  // it is asserted here so the trade cannot be forgotten or silently widened.
+  const fast = fastDups.find((d) => d.name === 'report.mp4');
+  assert.ok(fast, 'expected report.mp4 to be (wrongly) called a duplicate on the fast path');
+  assert.equal(fast.tier, 'size+name');
+  // and the exact run must still get it right
+  assert.ok(cons.find((x) => x.name === 'report.mp4'), '--exact must still catch it');
+});
+
+check('a duplicate row carries what is needed to verify it later', () => {
+  const r = fastDups.find((d) => d.name === 'scan_001.mp4');
+  assert.ok(r.nasPath, 'the NAS file to read');
+  assert.ok(r.md5, 'the Drive md5 to check it against');
 });
 
 check('walk reports where it is while it runs', async () => {
