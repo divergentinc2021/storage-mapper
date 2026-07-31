@@ -609,5 +609,109 @@ check('a real video file is NOT swept up as a native', () => {
   assert.equal(nat.isNativeExt('.gz'), false);
 });
 
+// ── converted-file substitution ─────────────────────────────────────────────
+/*
+ * A native stub cannot be copied, but its converted equivalent can — and must
+ * land where the ORIGINAL belonged, not in a parallel _Converted tree on the
+ * NAS. These check the join and, more importantly, that it REFUSES to guess.
+ */
+const cv = await import('../src/converted.mjs');
+
+const conv = (rel, base, size = 100) => ({
+  abs: 'H:/My Drive/_Converted for NAS/' + rel, rel, base, size,
+  root: 'H:/My Drive/_Converted for NAS',
+});
+const stub = (rel, base) => ({ rel, base, root: 'H:/Shared drives', abs: 'H:/Shared drives/' + rel });
+
+check('a stub is matched to its converted file by stem', () => {
+  const idx = cv.indexConverted([conv('JIG/DOCS/Training.docx', 'Training.docx')]);
+  const hit = cv.resolveConverted(stub('JIG/DOCS/Training.gdoc', 'Training.gdoc'), idx);
+  assert.equal(hit && hit.base, 'Training.docx');
+});
+
+check('the copy reads the CONVERTED file and writes to the ORIGINAL destination', () => {
+  const idx = cv.indexConverted([conv('JIG/DOCS/Training.docx', 'Training.docx', 4096)]);
+  const s = stub('JIG/DOCS/Training.gdoc', 'Training.gdoc');
+  const row = cv.substitutionRow(s, cv.resolveConverted(s, idx),
+    () => ({ nas: 'Z:/NAS/JIG/DOCS/Training.gdoc', rule: 'mirror' }), '/');
+
+  // Source: where the converted file actually is.
+  assert.equal(row.driveRoot, 'H:/My Drive/_Converted for NAS');
+  assert.equal(row.drivePath, 'JIG/DOCS/Training.docx');
+  // Destination: the original's folders, with the converted extension.
+  assert.equal(row.proposedNas, 'Z:/NAS/JIG/DOCS/Training.docx');
+  // planGroups uses `name` on BOTH sides, so it must match the source file.
+  assert.equal(row.name, 'Training.docx');
+  assert.equal(row.size, 4096);
+  assert.equal(row.viaConversion, true);
+  assert.equal(row.stubName, 'Training.gdoc');
+});
+
+check('two candidates are split by their parent folder', () => {
+  const idx = cv.indexConverted([
+    conv('ProjectA/Minutes.docx', 'Minutes.docx'),
+    conv('ProjectB/Minutes.docx', 'Minutes.docx'),
+  ]);
+  const hit = cv.resolveConverted(stub('ProjectB/Minutes.gdoc', 'Minutes.gdoc'), idx);
+  assert.equal(hit && hit.rel, 'ProjectB/Minutes.docx');
+});
+
+check('an ambiguous name is REFUSED rather than guessed', () => {
+  /*
+   * Two candidates and neither parent matches. Picking one would put a
+   * confidently-named wrong document on the NAS, which is worse than leaving a
+   * stub for a human to deal with.
+   */
+  const idx = cv.indexConverted([
+    conv('ProjectA/Minutes.docx', 'Minutes.docx'),
+    conv('ProjectB/Minutes.docx', 'Minutes.docx'),
+  ]);
+  assert.equal(cv.resolveConverted(stub('ProjectZ/Minutes.gdoc', 'Minutes.gdoc'), idx), null);
+});
+
+check('no converted file means no row at all', () => {
+  const idx = cv.indexConverted([conv('X/Other.docx', 'Other.docx')]);
+  assert.equal(cv.resolveConverted(stub('X/Training.gdoc', 'Training.gdoc'), idx), null);
+});
+
+check('an unmapped stub yields no row even when converted', () => {
+  const idx = cv.indexConverted([conv('X/Training.docx', 'Training.docx')]);
+  const s = stub('X/Training.gdoc', 'Training.gdoc');
+  // destFor returns nothing: without a destination there is nowhere to put it.
+  assert.equal(cv.substitutionRow(s, cv.resolveConverted(s, idx), () => null, '/'), null);
+});
+
+check('match() turns a converted stub into a copyable row', async () => {
+  const m = await import('../src/match.mjs');
+  const r = await m.match({
+    driveFiles: [{ abs: 'H:/d/Proj/Plan.gdoc', rel: 'Proj/Plan.gdoc', root: 'H:/d',
+                   base: 'Plan.gdoc', baseLower: 'plan.gdoc', ext: '.gdoc', size: 174 }],
+    nasFiles: [],
+    manifest: { byId: new Map(), byMd5: new Map(), bySize: new Map(), count: 0, withMd5: 0 },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+    convertedFiles: [conv('Proj/Plan.docx', 'Plan.docx', 2048)],
+  });
+  assert.equal(r.new.length, 1, 'the stub should now be copyable');
+  assert.equal(r.new[0].name, 'Plan.docx');
+  assert.equal(r.new[0].proposedNas, 'Z:/NAS/Proj/Plan.docx');
+  assert.equal(r.natives.length, 1, 'and still listed as a native, marked resolved');
+  assert.equal(r.natives[0].resolved, true);
+  assert.match(r.natives[0].note, /will be copied in its place/);
+});
+
+check('without a converted file the stub stays uncopyable', async () => {
+  const m = await import('../src/match.mjs');
+  const r = await m.match({
+    driveFiles: [{ abs: 'H:/d/Proj/Plan.gdoc', rel: 'Proj/Plan.gdoc', root: 'H:/d',
+                   base: 'Plan.gdoc', baseLower: 'plan.gdoc', ext: '.gdoc', size: 174 }],
+    nasFiles: [],
+    manifest: { byId: new Map(), byMd5: new Map(), bySize: new Map(), count: 0, withMd5: 0 },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+    convertedFiles: [],
+  });
+  assert.equal(r.new.length, 0);
+  assert.equal(r.natives[0].resolved, false);
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

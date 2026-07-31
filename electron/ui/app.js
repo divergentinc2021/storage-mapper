@@ -9,6 +9,9 @@
 var MAPPING = { nasRoots: [], driveRoots: [], aliases: [], map: [] };
 var DRIVE_ROOTS = [];
 var NAS_ROOTS = [];
+/* Optional: the Explorer's Convert output. Lets a native stub be copied as its
+   converted equivalent, to where the ORIGINAL belonged. */
+var CONV_ROOTS = [];
 var MANIFEST = null;
 var RESULT = null;
 var DROPPED = [];
@@ -418,10 +421,13 @@ function renderPaths() {
   };
   draw($('drivePaths'), DRIVE_ROOTS, 'drive', clash.drive);
   draw($('nasPaths'), NAS_ROOTS, 'nas', clash.nas);
+  draw($('convPaths'), CONV_ROOTS, 'conv', []);
   document.querySelectorAll('.paths .chip button').forEach(function (b) {
     b.addEventListener('click', function () {
       var i = Number(b.dataset.i);
-      if (b.dataset.kind === 'drive') DRIVE_ROOTS.splice(i, 1); else NAS_ROOTS.splice(i, 1);
+      if (b.dataset.kind === 'drive') DRIVE_ROOTS.splice(i, 1);
+      else if (b.dataset.kind === 'conv') CONV_ROOTS.splice(i, 1);
+      else NAS_ROOTS.splice(i, 1);
       renderPaths();
     });
   });
@@ -520,7 +526,7 @@ async function runCompare() {
   var res;
   try {
     res = await window.mapper.compare({
-      driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS,
+      driveRoots: DRIVE_ROOTS, nasRoots: NAS_ROOTS, convertedRoots: CONV_ROOTS,
       manifestPath: MANIFEST, mapping: MAPPING,
     });
   } catch (e) {
@@ -1465,6 +1471,12 @@ async function init() {
   $('btnNas').addEventListener('click', async function () {
     var p = await window.mapper.pickFolder('Choose a NAS folder', true);
     p.forEach(function (x) { if (NAS_ROOTS.indexOf(x) === -1) NAS_ROOTS.push(x); });
+    renderPaths();
+  });
+  $('btnConv').addEventListener('click', async function () {
+    var p = await window.mapper.pickFolder(
+      'Choose the converted-files folder (My Drive/_Converted for NAS)', true);
+    p.forEach(function (x) { if (CONV_ROOTS.indexOf(x) === -1) CONV_ROOTS.push(x); });
     renderPaths();
   });
   $('btnManifest').addEventListener('click', async function () {

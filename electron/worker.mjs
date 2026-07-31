@@ -199,9 +199,22 @@ process.on('message', async (msg) => {
 
     const manifest = manifestPath ? loadManifest(manifestPath) : emptyManifest();
 
+    /*
+     * The Explorer's Convert output, if the user pointed at it. Walked like any
+     * other tree; match() uses it to give native stubs a real file to copy.
+     */
+    const convertedFiles = [];
+    for (const r of dedupeRoots(raw.convertedRoots || []).roots) {
+      send({ type: 'progress', phase: 'drive', text: 'Indexing converted files…' });
+      const f = walk(r);
+      convertedFiles.push(...f);
+      send({ type: 'progress', phase: 'drive', text: `${r} — ${f.length} converted` });
+    }
+
     send({ type: 'progress', phase: 'match', text: 'Comparing…' });
     const result = await match({
       driveFiles, nasFiles, manifest, mapping,
+      convertedFiles, sep: process.platform === 'win32' ? '\\' : '/',
       onProgress: (done, total, hashed) =>
         send({ type: 'progress', phase: 'match', done, total, hashed,
                text: `${done}/${total} compared · ${hashed} NAS files hashed` }),

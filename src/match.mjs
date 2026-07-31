@@ -15,8 +15,19 @@
  */
 import { md5File } from './walk.mjs';
 import { classifyNative, isNativeExt } from './natives.mjs';
+import { indexConverted, resolveConverted, substitutionRow } from './converted.mjs';
 
-export async function match({ driveFiles, nasFiles, manifest, mapping, onProgress }) {
+export async function match({
+  driveFiles, nasFiles, manifest, mapping, onProgress,
+  convertedFiles = [], sep = '/',
+}) {
+  /*
+   * Files produced by the Explorer's Convert step. When one exists for a native
+   * stub, the stub stops being a dead end: the converted bytes are copied to
+   * where the ORIGINAL belonged, so the NAS gets Plan.docx beside its project
+   * rather than in a parallel _Converted tree.
+   */
+  const convIndex = indexConverted(convertedFiles);
   // ---- NAS indexes ---------------------------------------------------------
   const nasBySize = new Map();
   const nasByBase = new Map();
@@ -62,9 +73,25 @@ export async function match({ driveFiles, nasFiles, manifest, mapping, onProgres
     // ---- natives: never copyable ------------------------------------------
     if (isNativeExt(f.ext)) {
       const n = classifyNative(f.ext, f.abs, f.size);
+
+      // A converted equivalent turns an uncopyable stub into a real copy.
+      const conv = convIndex.size ? resolveConverted(f, convIndex) : null;
+      const row = conv ? substitutionRow(f, conv, (rel) => mapping.destFor(rel), sep) : null;
+      if (row) {
+        out.new.push(row);
+        out.natives.push({
+          drivePath: f.rel, driveRoot: f.root, name: f.base,
+          kind: n.kind, exportAs: n.exportAs || '', docId: n.docId || '',
+          note: 'converted — ' + conv.base + ' will be copied in its place',
+          resolved: true, convertedAs: conv.base,
+        });
+        continue;
+      }
+
       out.natives.push({
         drivePath: f.rel, driveRoot: f.root, name: f.base,
         kind: n.kind, exportAs: n.exportAs || '', docId: n.docId || '', note: n.note,
+        resolved: false,
       });
       continue;
     }
