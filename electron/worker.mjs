@@ -11,6 +11,7 @@ import { loadMapping } from '../src/mapping.mjs';
 import { match, nasInternalOverlap } from '../src/match.mjs';
 import { isNativeExt, classifyNative } from '../src/natives.mjs';
 import { crossOverlap } from '../src/mapplan.mjs';
+import { fmtBytes } from '../src/report.mjs';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -181,10 +182,19 @@ process.on('message', async (msg) => {
     }
     const driveProbes = driveRoots.map(probeRoot);
 
+    /*
+     * Say where the walk currently is. A root with 200k files took minutes in
+     * total silence, which looks the same from outside as a share that has
+     * dropped — and is what the idle detector would eventually (wrongly) call
+     * a stall.
+     */
+    const walkTick = (phase) => ({ files, dir }) =>
+      send({ type: 'progress', phase, text: `${files.toLocaleString()} files — ${dir}` });
+
     send({ type: 'progress', phase: 'nas', text: 'Indexing NAS…' });
     const nasFiles = [];
     for (const r of nasRoots) {
-      const f = walk(r);
+      const f = walk(r, { onTick: walkTick('nas') });
       nasFiles.push(...f);
       send({ type: 'progress', phase: 'nas', text: `${r} — ${f.length} entries` });
     }
@@ -192,7 +202,7 @@ process.on('message', async (msg) => {
     send({ type: 'progress', phase: 'drive', text: 'Indexing Google Drive (metadata only)…' });
     const driveFiles = [];
     for (const r of driveRoots) {
-      const f = walk(r);
+      const f = walk(r, { onTick: walkTick('drive') });
       driveFiles.push(...f);
       send({ type: 'progress', phase: 'drive', text: `${r} — ${f.length} entries` });
     }
@@ -206,7 +216,7 @@ process.on('message', async (msg) => {
     const convertedFiles = [];
     for (const r of dedupeRoots(raw.convertedRoots || []).roots) {
       send({ type: 'progress', phase: 'drive', text: 'Indexing converted files…' });
-      const f = walk(r);
+      const f = walk(r, { onTick: walkTick('drive') });
       convertedFiles.push(...f);
       send({ type: 'progress', phase: 'drive', text: `${r} — ${f.length} converted` });
     }
@@ -215,9 +225,18 @@ process.on('message', async (msg) => {
     const result = await match({
       driveFiles, nasFiles, manifest, mapping,
       convertedFiles, sep: process.platform === 'win32' ? '\\' : '/',
-      onProgress: (done, total, hashed) =>
-        send({ type: 'progress', phase: 'match', done, total, hashed,
-               text: `${done}/${total} compared · ${hashed} NAS files hashed` }),
+      /*
+       * Name the file being hashed. "12500/98000 compared" standing still for
+       * ten minutes reads as a dead app; the same number with "hashing
+       * ProjectMaster.mov" under it reads as a big file on a slow share, which
+       * is what it is.
+       */
+      onProgress: (p) =>
+        send({ type: 'progress', phase: 'match',
+               done: p.done, total: p.total, hashed: p.hashed,
+               text: `${p.done}/${p.total} compared · ${p.hashed} NAS files hashed` +
+                     (p.hashedBytes ? ` (${fmtBytes(p.hashedBytes)})` : '') +
+                     (p.hashing ? ` · reading ${p.hashing}…` : '') }),
     });
 
     const overlap = nasInternalOverlap(nasFiles, mapping);

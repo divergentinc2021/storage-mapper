@@ -118,8 +118,10 @@ async function main() {
   console.log('\nMatching…');
   const result = await match({
     driveFiles, nasFiles, manifest, mapping,
-    onProgress: (done, total, hashed) =>
-      process.stdout.write(`\r  ${done}/${total} compared, ${hashed} NAS files hashed`),
+    // Padded, or the tail of a longer previous line survives the carriage return.
+    onProgress: (p) => process.stdout.write(
+      ('\r  ' + `${p.done}/${p.total} compared, ${p.hashed} NAS files hashed` +
+       (p.hashing ? ` — hashing ${p.hashing}` : '')).padEnd(78).slice(0, 78)),
   });
   process.stdout.write('\r'.padEnd(60) + '\r');
 

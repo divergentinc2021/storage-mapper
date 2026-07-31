@@ -50,25 +50,57 @@ export async function match({
 
   const hashCache = new Map();
   let hashed = 0, hashedBytes = 0;
+
+  /*
+   * Progress is TIME-based, not every-Nth-file.
+   *
+   * It used to fire every 500 Drive files. Hashing happens between those ticks
+   * and runs at NAS speed, so a single 40 GB candidate could hold the bar
+   * still for many minutes. Worse, the run stays silent without stopping: the
+   * main process treats any message as proof of life, so a comparison that is
+   * grinding through gigabytes looks exactly like one that has died, and the
+   * five-minute stall detector never fires because the next batch of 500 always
+   * arrives eventually. Reported as the comparison hanging.
+   *
+   * Now nothing goes quiet for more than a second, and the text says what is
+   * being hashed, so a slow run is visibly slow rather than apparently dead.
+   */
+  let done = 0, lastTick = 0, nowHashing = '';
+  const TICK_MS = 1000;
+  const tick = (force) => {
+    if (!onProgress) return;
+    const t = Date.now();
+    if (!force && t - lastTick < TICK_MS) return;
+    lastTick = t;
+    onProgress({
+      done, total: driveFiles.length, hashed, hashedBytes, hashing: nowHashing,
+    });
+  };
+
   const hashOf = async (f) => {
     if (hashCache.has(f.abs)) return hashCache.get(f.abs);
     let h = null;
+    // Announce BEFORE the read, not after: the whole point is to say what the
+    // run is stuck on while it is stuck on it.
+    nowHashing = f.base;
+    tick(true);
     try {
       h = await md5File(f.abs);
       hashed++; hashedBytes += f.size;
     } catch (e) {
       h = null; // unreadable or refused (Drive mount) — fall back to metadata
     }
+    nowHashing = '';
     hashCache.set(f.abs, h);
     return h;
   };
 
   const out = { duplicates: [], conflicts: [], new: [], natives: [], errors: [] };
-  let done = 0;
 
   for (const f of driveFiles) {
     if (f.error) { out.errors.push(f.error); continue; }
-    if (++done % 500 === 0 && onProgress) onProgress(done, driveFiles.length, hashed);
+    done++;
+    tick(false);
 
     // ---- natives: never copyable ------------------------------------------
     if (isNativeExt(f.ext)) {
@@ -103,7 +135,23 @@ export async function match({
     let hit = null, tier = null;
     if (candidates.length) {
       if (driveMd5) {
-        for (const c of candidates) {
+        /*
+         * Same-name candidates first. Every candidate here already has the
+         * right size, and the loop stops at the first md5 that matches — so
+         * whichever is tried first is usually the only one read. A copy almost
+         * always kept its name, and reading it first turns "hash every file on
+         * the NAS that happens to be this size" into "hash one". Unordered,
+         * a common size (an empty file, a stock asset) meant hashing the whole
+         * bucket per Drive file, which is where the gigabytes went.
+         *
+         * Correctness is untouched: the same set is still searched, and the
+         * verdict is still decided by the hash.
+         */
+        const ordered = candidates.length > 1
+          ? candidates.slice().sort((a, b) =>
+              (b.baseLower === f.baseLower) - (a.baseLower === f.baseLower))
+          : candidates;
+        for (const c of ordered) {
           if (await hashOf(c) === driveMd5) { hit = c; tier = 'md5'; break; }
         }
       }

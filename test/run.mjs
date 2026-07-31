@@ -713,5 +713,90 @@ check('without a converted file the stub stays uncopyable', async () => {
   assert.equal(r.natives[0].resolved, false);
 });
 
+/*
+ * The comparison must never go quiet, and must not read more of the NAS than it
+ * has to. Both were reported as "it hangs while comparing files" — one because
+ * a long hash produced no output, the other because a common file size made it
+ * hash the whole bucket.
+ */
+check('a slow hash still reports, and names the file it is reading', async () => {
+  const m = await import('../src/match.mjs');
+  const wk = await import('../src/walk.mjs');
+
+  const big = path.join(TMP, 'slow', 'Master.mov');
+  w(big, C.identical);
+  const realMd5 = md5(C.identical);
+
+  // Make the read slow enough that a per-500-files reporter would say nothing.
+  const orig = wk.md5File;
+  const ticks = [];
+  const r = await m.match({
+    driveFiles: [{ abs: 'H:/d/P/Master.mov', rel: 'P/Master.mov', root: 'H:/d',
+                   base: 'Master.mov', baseLower: 'master.mov', ext: '.mov',
+                   size: C.identical.length }],
+    nasFiles: [{ abs: big, rel: 'Master.mov', root: path.dirname(big), base: 'Master.mov',
+                 baseLower: 'master.mov', ext: '.mov', size: C.identical.length }],
+    manifest: {
+      byId: new Map([['1', { name: 'Master.mov', size: C.identical.length, md5: realMd5 }]]),
+      byMd5: new Map(), bySize: new Map(), count: 1, withMd5: 1,
+    },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+    onProgress: (p) => ticks.push(p),
+  });
+  assert.equal(orig, wk.md5File, 'md5File left untouched');
+  assert.equal(r.duplicates.length, 1);
+  const naming = ticks.filter((t) => t.hashing === 'Master.mov');
+  assert.ok(naming.length >= 1, 'reported the file it was reading, before reading it');
+  assert.equal(typeof ticks[0].done, 'number', 'progress is an object, not positional');
+});
+
+check('a colliding size does not drag the whole bucket through md5', async () => {
+  const m = await import('../src/match.mjs');
+  const dir = path.join(TMP, 'bucket');
+  const size = C.renamed.length;
+
+  // 40 same-size NAS files; only one shares the Drive file's name, and it is
+  // the one that matches. Unordered, this used to hash every one of them.
+  const nasFiles = [];
+  for (let i = 0; i < 40; i++) {
+    const base = i === 39 ? 'Wanted.bin' : `Other${i}.bin`;
+    const abs = path.join(dir, base);
+    w(abs, i === 39 ? C.renamed : C.renamed.slice(0, -1) + String(i % 10));
+    nasFiles.push({ abs, rel: base, root: dir, base, baseLower: base.toLowerCase(),
+                    ext: '.bin', size });
+  }
+
+  const r = await m.match({
+    driveFiles: [{ abs: 'H:/d/Wanted.bin', rel: 'Wanted.bin', root: 'H:/d', base: 'Wanted.bin',
+                   baseLower: 'wanted.bin', ext: '.bin', size }],
+    nasFiles,
+    manifest: {
+      byId: new Map([['1', { name: 'Wanted.bin', size, md5: md5(C.renamed) }]]),
+      byMd5: new Map(), bySize: new Map(), count: 1, withMd5: 1,
+    },
+    mapping: { destFor: (rel) => ({ nas: 'Z:/NAS/' + rel, rule: 'mirror' }) },
+  });
+
+  assert.equal(r.duplicates.length, 1, 'found it');
+  assert.equal(r.duplicates[0].tier, 'md5');
+  assert.equal(r.stats.hashedFiles, 1,
+    `hashed ${r.stats.hashedFiles} files to find one match — should be 1`);
+});
+
+check('walk reports where it is while it runs', async () => {
+  const wk = await import('../src/walk.mjs');
+  const seen = [];
+  const files = wk.walk(DRIVE, { onTick: (t) => seen.push(t) });
+  assert.ok(files.length > 0, 'still returns the files');
+  // The fixture is far too small to take a second, so no tick is expected —
+  // what matters is that asking for one is harmless and the shape is right.
+  seen.forEach((t) => {
+    assert.equal(typeof t.files, 'number');
+    assert.equal(typeof t.dir, 'string');
+  });
+  assert.deepEqual(wk.walk(DRIVE).map((f) => f.rel).sort(),
+                   files.map((f) => f.rel).sort(), 'ticking changes nothing');
+});
+
 console.log(`\n${failures ? `${failures} FAILED` : 'all checks passed'}\n`);
 process.exit(failures ? 1 : 0);

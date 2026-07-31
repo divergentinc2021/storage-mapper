@@ -214,9 +214,27 @@ export function walk(root, opts = {}) {
   const maxDepth = opts.maxDepth ?? Infinity;
   const rootResolved = path.resolve(root);
 
+  /*
+   * Optional heartbeat. The walk is synchronous and used to report only once it
+   * had finished a whole root, so indexing a large Drive or NAS share said
+   * nothing for minutes — indistinguishable from a mount that has stopped
+   * answering, which is exactly what the caller's stall detector is trying to
+   * tell apart. Called at most once a second, and only if asked for.
+   */
+  const onTick = typeof opts.onTick === 'function' ? opts.onTick : null;
+  let lastTick = Date.now();
+  const tick = (dir) => {
+    if (!onTick) return;
+    const t = Date.now();
+    if (t - lastTick < 1000) return;
+    lastTick = t;
+    onTick({ files: out.length, dir });
+  };
+
   const stack = [{ dir: rootResolved, depth: 0 }];
   while (stack.length) {
     const { dir, depth } = stack.pop();
+    tick(dir);
     let entries;
     try {
       entries = readdirSync(toLongPath(dir), { withFileTypes: true });
