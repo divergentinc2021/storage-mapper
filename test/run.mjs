@@ -296,6 +296,7 @@ check('planGroups skips rows it cannot safely act on', () => {
   assert.equal(groups.length, 1, 'the two same-folder files should share one command');
   assert.equal(groups[0].files.length, 2);
   assert.equal(groups[0].bytes, 30);
+  assert.deepEqual(groups[0].literal, [], 'ordinary names stay on the robocopy side');
   assert.equal(skipped.length, 2);
   assert.deepEqual(skipped.map((s) => s.why).sort(),
     ['destination is not an absolute path', 'no mapping rule']);
@@ -329,6 +330,59 @@ await (async () => {
   check('re-running the copy is safe and changes nothing', () => {
     const before = readFileSync(path.join(CDST, 'Proj', 'clip.mp4'), 'utf8');
     assert.equal(before, 'REAL-COPY-PAYLOAD');
+  });
+
+  /*
+   * The reported failure: exit 16, "3 of 3 folders FAILED", 47 files did not
+   * land and 0 did. robocopy rejects a file argument beginning with "-" as a
+   * switch and refuses the entire command, so twelve badly-named textures took
+   * every other file in their folders down with them.
+   */
+  const HSRC = path.join(TMP, 'hypsrc'), HDST = path.join(TMP, 'hypdst');
+  w(path.join(HSRC, 'V3', '-X wing_Normal_v003.png'), 'LEADING-HYPHEN');
+  w(path.join(HSRC, 'V3', 'Env_Optimised_-X_Wing_v003.fbx'), 'MID-HYPHEN');
+  w(path.join(HSRC, 'V3', 'other-X wing_Normal_v003.png'), 'DECOY-MUST-NOT-MOVE');
+  mkdirSync(HDST, { recursive: true });
+  const hrows = [
+    { drivePath: 'V3/-X wing_Normal_v003.png', name: '-X wing_Normal_v003.png', size: 14,
+      driveRoot: HSRC, proposedNas: path.join(HDST, 'V3', '-X wing_Normal_v003.png') },
+    { drivePath: 'V3/Env_Optimised_-X_Wing_v003.fbx', name: 'Env_Optimised_-X_Wing_v003.fbx', size: 10,
+      driveRoot: HSRC, proposedNas: path.join(HDST, 'V3', 'Env_Optimised_-X_Wing_v003.fbx') },
+  ];
+
+  const hres = await copier.run({ rows: hrows, dryRun: false }, () => {});
+  check('a file whose name starts with "-" copies, and does not sink its folder', () => {
+    assert.equal(hres.ok, true, `copy failed: ${JSON.stringify(hres.results)}`);
+    const hyph = path.join(HDST, 'V3', '-X wing_Normal_v003.png');
+    const mid = path.join(HDST, 'V3', 'Env_Optimised_-X_Wing_v003.fbx');
+    assert.ok(existsSync(mid), 'the ordinary file in the same folder must still land');
+    assert.ok(existsSync(hyph), 'and so must the hyphen-named one');
+    assert.equal(readFileSync(hyph, 'utf8'), 'LEADING-HYPHEN', 'wrong file copied');
+  });
+
+  check('the wildcard forms robocopy WOULD accept are not used — no over-copy', () => {
+    // "*name" and "?ame" both match the decoy; copying it would put a file on
+    // the NAS that the plan never listed.
+    assert.ok(!existsSync(path.join(HDST, 'V3', 'other-X wing_Normal_v003.png')),
+      'a file that was not in the plan was copied');
+  });
+
+  check('a direct copy never replaces what is already there', async () => {
+    w(path.join(HDST, 'V3', '-X wing_Normal_v003.png'), 'ALREADY-ON-THE-NAS');
+    const again = await copier.run({ rows: hrows, dryRun: false }, () => {});
+    assert.equal(again.ok, true);
+    assert.equal(readFileSync(path.join(HDST, 'V3', '-X wing_Normal_v003.png'), 'utf8'),
+      'ALREADY-ON-THE-NAS', 'the existing file was overwritten');
+  });
+
+  check('a dry run still writes nothing for hyphen names', async () => {
+    const DDST = path.join(TMP, 'hypdry');
+    const drows = [{ drivePath: 'V3/-X wing_Normal_v003.png', name: '-X wing_Normal_v003.png',
+                     size: 14, driveRoot: HSRC, proposedNas: path.join(DDST, 'V3', '-X wing_Normal_v003.png') }];
+    const d = await copier.run({ rows: drows, dryRun: true }, () => {});
+    assert.equal(d.ok, true);
+    assert.ok(!existsSync(path.join(DDST, 'V3', '-X wing_Normal_v003.png')),
+      'dry run created a file');
   });
 })();
 

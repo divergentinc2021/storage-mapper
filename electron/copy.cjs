@@ -17,6 +17,8 @@
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const os = require('node:os');
+const fsp = require('node:fs/promises');
+const { constants: fsConstants } = require('node:fs');
 
 const IS_WIN = process.platform === 'win32';
 
@@ -64,7 +66,14 @@ async function run(opts, emit) {
       ? src.robocopyArgs({ ...g, dryRun: opts.dryRun, threads: opts.threads ?? 8, logFile })
       : src.rsyncArgs({ ...g, dryRun: opts.dryRun });
 
-    const code = await new Promise((resolve) => {
+    /*
+     * A folder can be nothing but leading-hyphen names. Spawning robocopy with
+     * no files would copy the WHOLE directory, which is the one thing a planned
+     * copy must never do.
+     */
+    // On non-Windows the literal names go through rsync like everything else.
+    const engineFiles = IS_WIN ? g.files.length : g.files.length + (g.literal || []).length;
+    const code = engineFiles === 0 ? 0 : await new Promise((resolve) => {
       let child;
       try {
         child = spawn(bin, args, { windowsHide: true });
@@ -89,8 +98,44 @@ async function run(opts, emit) {
     current.child = null;
 
     const verdict = IS_WIN ? src.classifyRobocopy(code) : src.classifyRsync(code);
+
+    /*
+     * The names robocopy refuses to be given, copied one at a time. Never
+     * overwrites — matching /XO's promise the conservative way, since we cannot
+     * hand these to the engine that implements it.
+     */
+    const literalFailed = [];
+    for (const name of (IS_WIN ? (g.literal || []) : [])) {
+      if (current.cancelled) break;
+      const from = path.join(g.srcDir, name);
+      const to = path.join(g.dstDir, name);
+      try {
+        if (opts.dryRun) {
+          emit({ type: 'log', line: `would copy (direct): ${name}` });
+          continue;
+        }
+        await fsp.mkdir(g.dstDir, { recursive: true });
+        // COPYFILE_EXCL: fails if the destination exists, so nothing is replaced.
+        await fsp.copyFile(from, to, fsConstants.COPYFILE_EXCL);
+        emit({ type: 'log', line: `copied (direct, name starts with "-"): ${name}` });
+      } catch (e) {
+        if (e && e.code === 'EEXIST') {
+          emit({ type: 'log', line: `already there, left alone: ${name}` });
+          continue;
+        }
+        literalFailed.push(`${name} — ${e.code || e.message}`);
+        emit({ type: 'log', line: `FAILED (direct): ${name} — ${e.code || e.message}` });
+      }
+    }
+    if (literalFailed.length) {
+      verdict.ok = false;
+      verdict.summary = `${verdict.summary}; ${literalFailed.length} file(s) whose name ` +
+        `starts with "-" could not be copied directly`;
+    }
+
     if (verdict.ok && !opts.dryRun) copiedBytes += g.bytes;
-    results.push({ ...verdict, srcDir: g.srcDir, dstDir: g.dstDir, files: g.files.length, bytes: g.bytes });
+    const fileCount = g.files.length + (g.literal || []).length;
+    results.push({ ...verdict, srcDir: g.srcDir, dstDir: g.dstDir, files: fileCount, bytes: g.bytes });
     emit({ type: 'group-done', index: i, total: groups.length, verdict });
   }
 

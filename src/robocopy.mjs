@@ -70,11 +70,16 @@ export function robocopyArgs({ srcDir, dstDir, files, dryRun, threads = 8, logFi
   return args;
 }
 
-export function rsyncArgs({ srcDir, dstDir, files, dryRun }) {
+export function rsyncArgs({ srcDir, dstDir, files, literal = [], dryRun }) {
   const args = ['-a', '--ignore-existing'];
   if (dryRun) args.push('--dry-run');
   args.push('--out-format=%n');
-  for (const f of files) args.push(`${srcDir}/${f}`);
+  /*
+   * literal is folded back in here. The split exists only because robocopy
+   * takes bare file names; rsync is given a full path, so "…/-X wing.png"
+   * begins with the source directory and is never mistaken for a switch.
+   */
+  for (const f of [...files, ...literal]) args.push(`${srcDir}/${f}`);
   args.push(`${dstDir}/`);
   return args;
 }
@@ -84,6 +89,25 @@ export function rsyncArgs({ srcDir, dstDir, files, dryRun }) {
  * pair. Only rows that are safe to act on survive; everything else is returned
  * with a reason so the UI can say why rather than silently dropping it.
  */
+/**
+ * A name robocopy will not accept as a file argument.
+ *
+ * robocopy parses any argument beginning with "-" as a switch, and rejects the
+ * whole command:
+ *
+ *     ERROR : Invalid Parameter #3 : "-X wing_Normal_v003.png"
+ *
+ * It exits 16 having copied NOTHING, so one such file takes its entire folder
+ * down with it — 47 files reported as failed because 12 of them began with a
+ * hyphen. There is no escaping form that fixes it: ".\name" and "/IF name" are
+ * rejected the same way, and the wildcard forms that ARE accepted ("*name",
+ * "?ame") can match neighbouring files, which would put something on the NAS
+ * that the plan never listed. These are copied directly instead.
+ */
+export function needsLiteralCopy(name) {
+  return String(name).startsWith('-');
+}
+
 export function planGroups(rows, isAbsoluteDest, sep) {
   const groups = new Map();
   const skipped = [];
@@ -98,9 +122,11 @@ export function planGroups(rows, isAbsoluteDest, sep) {
     const srcDir = dirname(`${r.driveRoot}${sep}${r.drivePath.split('/').join(sep)}`);
     const dstDir = dirname(r.proposedNas.split('/').join(sep));
     const key = `${srcDir}|${dstDir}`;
-    if (!groups.has(key)) groups.set(key, { srcDir, dstDir, files: [], bytes: 0 });
+    if (!groups.has(key)) groups.set(key, { srcDir, dstDir, files: [], literal: [], bytes: 0 });
     const g = groups.get(key);
-    g.files.push(r.name);
+    // Kept out of the argv entirely rather than escaped — see needsLiteralCopy.
+    if (needsLiteralCopy(r.name)) g.literal.push(r.name);
+    else g.files.push(r.name);
     g.bytes += Number(r.size) || 0;
   }
   return { groups: [...groups.values()], skipped };
