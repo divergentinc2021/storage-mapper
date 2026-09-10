@@ -61,9 +61,29 @@ export function classifyRsync(code) {
 export function robocopyArgs({ srcDir, dstDir, files, dryRun, threads = 8, logFile }) {
   const args = [srcDir, dstDir, ...files];
   args.push('/XO');            // never overwrite a newer file already on the NAS
-  args.push('/R:2', '/W:5');   // 2 retries, 5s apart — do not hang on a dropped share
-  args.push('/NP');            // no per-file percentage spam
+
+  /*
+   * /NP IS DELIBERATELY ABSENT. It used to be here to stop "percentage spam".
+   *
+   * Measured against the real NAS at 11.1 MB/s: a 28 GB file takes 43 minutes,
+   * and with /NP robocopy emits ZERO progress lines for the whole of it. The
+   * copy dialog sits on one unchanging sentence for three quarters of an hour,
+   * which is indistinguishable from a hang — so the run gets cancelled, and
+   * robocopy has no resume, so the next attempt starts the 28 GB again.
+   *
+   * Without /NP the same 2 GB transfer emitted 101 percent lines with /MT:8
+   * (longest silence 2.3 s) and took 184 s either way. Progress is free; the
+   * silence was not.
+   */
   args.push('/NDL');           // no directory listing
+
+  /*
+   * Retries scale with how long the transfer can run. /R:2 /W:5 was sized for
+   * small files; on a 43-minute single-file copy two retries 5 s apart is a
+   * blip's worth of tolerance for a link that has to hold for the whole of it.
+   */
+  args.push('/R:4', '/W:10');
+
   if (threads > 1) args.push(`/MT:${threads}`);
   if (dryRun) args.push('/L'); // list only: touches nothing
   if (logFile) args.push(`/LOG+:${logFile}`, '/TEE');
@@ -141,10 +161,69 @@ export function planGroups(rows, isAbsoluteDest, sep) {
      *
      * files — everything else, and the overwhelming majority.
      */
-    if (r.conflictMode === 'replace') g.replace.push(r.name);
-    else if (needsLiteralCopy(r.name)) g.literal.push(r.name);
-    else g.files.push(r.name);
+    if (r.conflictMode === 'replace') g.replace.push({ name: r.name, size: Number(r.size) || 0 });
+    else if (needsLiteralCopy(r.name)) g.literal.push({ name: r.name, size: Number(r.size) || 0 });
+    else g.files.push({ name: r.name, size: Number(r.size) || 0 });
     g.bytes += Number(r.size) || 0;
   }
-  return { groups: [...groups.values()], skipped };
+  return { groups: chunkGroups([...groups.values()]), skipped };
+}
+
+/*
+ * How much one robocopy invocation is allowed to carry.
+ *
+ * A directory used to become exactly one command regardless of size, which made
+ * the whole folder a single all-or-nothing unit: one verdict, one progress
+ * event at the end, and — when robocopy refuses the command line — every file
+ * in it lost together. On a media tree that is hundreds of gigabytes behind one
+ * exit code.
+ *
+ * The byte budget is the one that matters. At the measured 11.1 MB/s a chunk of
+ * 8 GB is about 12 minutes, so the run reports in at roughly that cadence even
+ * in the worst case, and a failure costs one chunk rather than one folder.
+ */
+export const CHUNK_MAX_FILES = 200;
+export const CHUNK_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+
+/**
+ * Split each directory group into chunks small enough to fail, report and
+ * retry independently.
+ *
+ * A file larger than the whole budget is NOT split — robocopy copies a file
+ * atomically and has no resume, so a 28 GB mp4 is indivisible. It gets a chunk
+ * to itself instead, which is the next best thing: its progress is its own, and
+ * when it fails it takes nothing else with it.
+ */
+export function chunkGroups(groups) {
+  const out = [];
+  for (const g of groups) {
+    const chunks = [];
+    let cur = null;
+    const open = () => {
+      cur = { srcDir: g.srcDir, dstDir: g.dstDir, files: [], literal: [], replace: [], bytes: 0 };
+      chunks.push(cur);
+    };
+    open();
+    for (const f of g.files) {
+      // Start a new chunk when this file would push the current one over, but
+      // never emit an empty one just to make room for an oversized file.
+      if (cur.files.length &&
+          (cur.files.length >= CHUNK_MAX_FILES || cur.bytes + f.size > CHUNK_MAX_BYTES)) {
+        open();
+      }
+      cur.files.push(f.name);
+      cur.bytes += f.size;
+    }
+    /*
+     * literal and replace are copied file-by-file by the runner, not by
+     * robocopy, so they are not what the budget is protecting against. They ride
+     * on the first chunk so they are neither duplicated across chunks nor lost.
+     */
+    chunks[0].literal = g.literal.map((f) => f.name);
+    chunks[0].replace = g.replace.map((f) => f.name);
+    for (const c of chunks) {
+      if (c.files.length || c.literal.length || c.replace.length) out.push(c);
+    }
+  }
+  return out;
 }

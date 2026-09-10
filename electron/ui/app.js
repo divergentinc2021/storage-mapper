@@ -1946,10 +1946,26 @@ async function init() {
         (e.name ? ' · ' + e.name : '');
       return;
     }
+    if (e.type === 'file-progress') {
+      /*
+       * Progress WITHIN one chunk. Blended into the overall bar so a single
+       * 28 GB file — 43 minutes at the measured 11 MB/s — visibly moves instead
+       * of sitting on one sentence until it finishes or is cancelled.
+       */
+      var span = 100 / Math.max(1, e.total);
+      var overall = (e.index * span) + (span * e.percent / 100);
+      $('copyFill').style.width = Math.min(100, Math.round(overall)) + '%';
+      var st = $('copyStatus');
+      var base = st.dataset.base || st.textContent || '';
+      if (!st.dataset.base) st.dataset.base = base;
+      st.textContent = base + ' · ' + e.percent + '%';
+      return;
+    }
     if (e.type === 'group-start') {
       $('copyFill').style.width = Math.round(100 * e.index / Math.max(1, e.total)) + '%';
-      $('copyStatus').textContent = 'Folder ' + (e.index + 1) + ' of ' + e.total +
+      $('copyStatus').dataset.base = 'Folder ' + (e.index + 1) + ' of ' + e.total +
         ' · ' + e.files + ' file(s) · ' + fmtBytes(e.bytes);
+      $('copyStatus').textContent = $('copyStatus').dataset.base;
       $('copyLog').insertAdjacentHTML('beforeend',
         '<div class="row">→ ' + esc(e.dstDir) + '</div>');
     } else if (e.type === 'group-done') {

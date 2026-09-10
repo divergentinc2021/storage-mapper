@@ -1114,6 +1114,87 @@ await (async () => {
   });
 })();
 
+/*
+ * A 28 GB mp4 reported as failed. Measured against the real NAS: 11.1 MB/s, so
+ * that file takes 43 minutes, and with /NP robocopy emitted ZERO progress lines
+ * for the whole of it. Silent for 43 minutes is indistinguishable from hung.
+ */
+check('robocopy is asked for progress, not silence', async () => {
+  const rc = await import('../src/robocopy.mjs');
+  const args = rc.robocopyArgs({ srcDir: 'S', dstDir: 'D', files: ['big.mp4'], threads: 8 });
+  assert.ok(!args.includes('/NP'), '/NP makes a long single-file copy emit nothing');
+  assert.ok(args.includes('/NDL'), 'directory listing stays off — that noise is not progress');
+  const r = args.indexOf('/R:4');
+  assert.ok(r !== -1, 'retries raised for transfers that run for tens of minutes');
+  assert.ok(args.includes('/W:10'));
+});
+
+check('nothing that can delete is ever emitted, still', async () => {
+  const rc = await import('../src/robocopy.mjs');
+  const args = rc.robocopyArgs({ srcDir: 'S', dstDir: 'D', files: ['a'], threads: 8 });
+  for (const bad of ['/MIR', '/PURGE', '/MOV', '/MOVE']) {
+    assert.ok(!args.includes(bad), `${bad} must never appear`);
+  }
+});
+
+check('a folder is chunked so one failure does not cost the whole folder', async () => {
+  const rc = await import('../src/robocopy.mjs');
+  const isAbs = (p) => /^[A-Za-z]:[\/]/.test(p);
+  const rows = [];
+  for (let i = 0; i < 450; i++) {
+    rows.push({ drivePath: `P/f${i}.jpg`, name: `f${i}.jpg`, size: 1024,
+                driveRoot: 'H:/d', proposedNas: `Z:/n/P/f${i}.jpg` });
+  }
+  const { groups } = rc.planGroups(rows, isAbs, '/');
+  assert.ok(groups.length >= 3, `450 files should span several chunks, got ${groups.length}`);
+  assert.ok(groups.every((g) => g.files.length <= rc.CHUNK_MAX_FILES), 'chunk over the file budget');
+  // every file appears exactly once
+  const seen = groups.flatMap((g) => g.files);
+  assert.equal(seen.length, 450);
+  assert.equal(new Set(seen).size, 450, 'a file was duplicated or lost across chunks');
+});
+
+check('a file bigger than the whole budget gets a chunk to itself', async () => {
+  const rc = await import('../src/robocopy.mjs');
+  const isAbs = (p) => /^[A-Za-z]:[\/]/.test(p);
+  const huge = 28 * 1024 * 1024 * 1024;   // the reported mp4
+  const rows = [
+    { drivePath: 'P/small.txt', name: 'small.txt', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/n/P/small.txt' },
+    { drivePath: 'P/big.mp4', name: 'big.mp4', size: huge, driveRoot: 'H:/d', proposedNas: 'Z:/n/P/big.mp4' },
+    { drivePath: 'P/after.txt', name: 'after.txt', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/n/P/after.txt' },
+  ];
+  const { groups } = rc.planGroups(rows, isAbs, '/');
+  const bigChunk = groups.find((g) => g.files.includes('big.mp4'));
+  assert.ok(bigChunk, 'the big file must still be planned');
+  assert.deepEqual(bigChunk.files, ['big.mp4'],
+    'robocopy copies a file atomically and cannot resume — it must not share a chunk');
+  const all = groups.flatMap((g) => g.files);
+  assert.equal(all.length, 3, 'nothing dropped while isolating the big file');
+});
+
+check('literal and replace ride exactly one chunk', async () => {
+  const rc = await import('../src/robocopy.mjs');
+  const isAbs = (p) => /^[A-Za-z]:[\/]/.test(p);
+  const rows = [{ drivePath: 'P/-odd.png', name: '-odd.png', size: 1, driveRoot: 'H:/d', proposedNas: 'Z:/n/P/-odd.png' }];
+  for (let i = 0; i < 300; i++) {
+    rows.push({ drivePath: `P/f${i}.jpg`, name: `f${i}.jpg`, size: 1, driveRoot: 'H:/d', proposedNas: `Z:/n/P/f${i}.jpg` });
+  }
+  const { groups } = rc.planGroups(rows, isAbs, '/');
+  const lit = groups.flatMap((g) => g.literal);
+  assert.deepEqual(lit, ['-odd.png'], 'a direct-copy name must not be repeated per chunk');
+});
+
+check('a small folder is still one command', async () => {
+  const rc = await import('../src/robocopy.mjs');
+  const isAbs = (p) => /^[A-Za-z]:[\/]/.test(p);
+  const { groups } = rc.planGroups([
+    { drivePath: 'P/a.mp4', name: 'a.mp4', size: 10, driveRoot: 'H:/d', proposedNas: 'Z:/n/P/a.mp4' },
+    { drivePath: 'P/b.mp4', name: 'b.mp4', size: 20, driveRoot: 'H:/d', proposedNas: 'Z:/n/P/b.mp4' },
+  ], isAbs, '/');
+  assert.equal(groups.length, 1, 'chunking must not fragment ordinary folders');
+  assert.equal(groups[0].bytes, 30);
+});
+
 check('isUnder does not treat a sibling with a shared prefix as inside', async () => {
   const wk = await import('../src/walk.mjs');
   assert.equal(wk.isUnder('/a/_Converted for NAS/x.docx', '/a/_Converted for NAS'), true);

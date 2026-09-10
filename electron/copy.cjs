@@ -84,9 +84,31 @@ async function run(opts, emit) {
         return resolve(IS_WIN ? 16 : 1);
       }
       current.child = child;
+      /*
+       * robocopy reports a big file's progress as bare percentages, and writes
+       * them with a CARRIAGE RETURN and no newline so a console can overwrite
+       * one line in place. Splitting on \n alone therefore buffers the entire
+       * run into one chunk that arrives when the file finishes — which is
+       * exactly the silence this is meant to cure. Split on \r as well.
+       *
+       * A percentage is progress, not log: it drives the bar and is kept out of
+       * the log pane, which would otherwise take 2048 lines for one 2 GB file.
+       */
+      let lastPct = -1;
       const onData = (b) => {
-        String(b).split(/\r?\n/).forEach((line) => {
-          if (line.trim()) emit({ type: 'log', line: line.trim() });
+        String(b).split(/\r\n|\r|\n/).forEach((raw) => {
+          const line = raw.trim();
+          if (!line) return;
+          const m = /^(\d{1,3}(?:\.\d+)?)%$/.exec(line);
+          if (m) {
+            const pct = Math.min(100, Math.round(Number(m[1])));
+            if (pct !== lastPct) {
+              lastPct = pct;
+              emit({ type: 'file-progress', percent: pct, index: i, total: groups.length });
+            }
+            return;
+          }
+          emit({ type: 'log', line });
         });
       };
       child.stdout && child.stdout.on('data', onData);
