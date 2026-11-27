@@ -31,7 +31,7 @@ const PROJECT_TREES = [
 
 const BUILTINS = [
   {
-    name: 'ProjectsOnAllDrives',
+    name: 'BACKUP UIZ Google Drive',
     local: {
       driveRoots: PROJECT_TREES.map((t) => `${PROJECTS}\\${t}`),
       nasRoots: PROJECT_TREES.map((t) => `Z:\\${t}`),
@@ -85,7 +85,7 @@ function seed(app, profiles) {
   s.builtinsSeeded = true;
   // Only pick a default if the user has none; otherwise theirs stands.
   if (!s.defaultProfile) {
-    const mine = profiles.list(app).find((p) => p.name === 'ProjectsOnAllDrives');
+    const mine = profiles.list(app).find((p) => p.name === 'BACKUP UIZ Google Drive');
     if (mine) s.defaultProfile = mine.file;
   }
   profiles.writeSettings(app, s);

@@ -1841,7 +1841,13 @@ async function init() {
 
   var boot = await window.mapper.profilesBoot();
   applyProfileToUi(boot.profile || blankProfile());
-  PROFILE_FILE = boot.defaultFile || null;
+  /*
+   * NOT boot.defaultFile. The app now starts empty, and pointing PROFILE_FILE at
+   * the default preset while nothing is loaded makes the next Save write the
+   * EMPTY set straight over that preset — silently, because Save only prompts
+   * for a name when it has no file to write to.
+   */
+  PROFILE_FILE = boot.profile ? (boot.defaultFile || null) : null;
   await refreshProfileList();
 
   $('profileSel').addEventListener('change', async function () {

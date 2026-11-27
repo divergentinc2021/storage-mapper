@@ -8,7 +8,7 @@
  *   - a .gdoc stub                                             → native, never copied
  *   - the same project under an old code name on a second NAS root → overlap
  */
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, utimesSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, utimesSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -1054,17 +1054,17 @@ await (async () => {
   check('the built-in profiles are written on first run', () => {
     assert.equal(first.seeded, builtins.BUILTINS.length);
     const names = profiles.list(fakeApp).map((p) => p.name).sort();
-    assert.deepEqual(names, ['My Drive', 'ProjectsOnAllDrives', 'Shared drives']);
+    assert.deepEqual(names, ['BACKUP UIZ Google Drive', 'My Drive', 'Shared drives']);
   });
 
   check('one of them is made the default so the app opens ready', () => {
     const s = profiles.getSettings(fakeApp);
     assert.ok(s.defaultProfile, 'no default was set');
-    assert.match(s.defaultProfile, /ProjectsOnAllDrives/);
+    assert.match(s.defaultProfile, /BACKUP UIZ Google Drive/);
   });
 
-  check('ProjectsOnAllDrives carries every project tree, paired to the NAS', () => {
-    const p = profiles.list(fakeApp).find((x) => x.name === 'ProjectsOnAllDrives');
+  check('BACKUP UIZ Google Drive carries every project tree, paired to the destination', () => {
+    const p = profiles.list(fakeApp).find((x) => x.name === 'BACKUP UIZ Google Drive');
     const full = profiles.load(fakeApp, p.file);
     assert.equal(full.local.driveRoots.length, builtins.PROJECT_TREES.length);
     assert.equal(full.local.nasRoots.length, builtins.PROJECT_TREES.length);
@@ -1193,6 +1193,49 @@ check('a small folder is still one command', async () => {
   ], isAbs, '/');
   assert.equal(groups.length, 1, 'chunking must not fragment ordinary folders');
   assert.equal(groups[0].bytes, 30);
+});
+
+/*
+ * Readable is not writable.
+ *
+ * On 24 Nov 2026 a QNAP storage pool filled, the NAS set every share read-only,
+ * and for three days the app kept planning copies against it: probeRoot said
+ * the destination existed, was a folder and could be READ, which it could.
+ * Only robocopy failed, per folder, with ERROR 19 "The media is write
+ * protected" — and that surfaced to the user as the app being broken.
+ */
+check('a destination is only usable if a real file can be created in it', async () => {
+  const wk = await import('../src/walk.mjs');
+  const dir = path.join(TMP, 'writable');
+  mkdirSync(dir, { recursive: true });
+
+  const r = wk.probeWritable(dir);
+  assert.equal(r.writable, true, r.error);
+  assert.equal(r.error, '', 'a clean probe reports no error');
+
+  // and it must leave NOTHING behind
+  const left = readdirSync(dir).filter((f) => f.includes('write-probe'));
+  assert.deepEqual(left, [], 'the probe file was not cleaned up');
+});
+
+check('a destination that cannot be written to is reported, not assumed good', async () => {
+  const wk = await import('../src/walk.mjs');
+  const missing = path.join(TMP, 'no-such-dir-' + Date.now());
+  const r = wk.probeWritable(missing);
+  assert.equal(r.writable, false, 'a path that does not exist is not writable');
+  assert.ok(r.error, 'a failure must carry a reason');
+});
+
+check('readable and writable are INDEPENDENT answers', async () => {
+  const wk = await import('../src/walk.mjs');
+  // The real failure: readable true, writable false. probeRoot alone cannot
+  // see it, which is the whole reason probeWritable exists.
+  const dir = path.join(TMP, 'readable-check');
+  mkdirSync(dir, { recursive: true });
+  const pr = wk.probeRoot(dir);
+  assert.equal(pr.readable, true);
+  assert.equal(typeof pr.writable, 'undefined',
+    'probeRoot must NOT claim to know about writability');
 });
 
 check('isUnder does not treat a sibling with a shared prefix as inside', async () => {

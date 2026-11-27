@@ -5,7 +5,7 @@
  * It imports the same src/ modules the CLI uses — there is no second copy of the
  * matching logic to drift out of sync with the tested one.
  */
-import { walk, driveMountVerdict, dedupeRoots, probeRoot, isUnder } from '../src/walk.mjs';
+import { walk, driveMountVerdict, dedupeRoots, probeRoot, probeWritable, isUnder } from '../src/walk.mjs';
 import { loadManifest, emptyManifest } from '../src/manifest.mjs';
 import { loadMapping } from '../src/mapping.mjs';
 import { match, nasInternalOverlap } from '../src/match.mjs';
@@ -180,6 +180,35 @@ process.on('message', async (msg) => {
         'from the NAS list.'
       );
     }
+
+    /*
+     * Readable is not writable, and the difference is not academic: a QNAP pool
+     * that fills sets every share READ-ONLY while reads, mounts and listings all
+     * keep working perfectly. The comparison then runs, the plan looks right, and
+     * only the copy fails — per folder, with robocopy's ERROR 19, which reads as
+     * the app being broken. Three days were spent there on 24 Nov 2026.
+     *
+     * So prove the destination accepts a file before planning anything for it.
+     */
+    for (const p of nasProbes) {
+      const w = probeWritable(p.root);
+      p.writable = w.writable;
+      if (!w.writable) p.writeError = w.error;
+    }
+    const unwritable = nasProbes.filter((p) => !p.writable);
+    if (unwritable.length) {
+      throw new Error(
+        (unwritable.length === 1
+          ? 'A destination folder cannot be written to:'
+          : 'Destination folders cannot be written to:') +
+        '\n\n' + unwritable.map((p) => `  • ${p.root} — ${p.writeError}`).join('\n') +
+        '\n\nReading works, so the share looks healthy — but nothing can be copied ' +
+        'into it. On a QNAP this is usually a full storage pool: the NAS sets the ' +
+        'volume read-only to protect itself, and every share stops accepting ' +
+        'writes. Check Storage & Snapshots for the pool free space, then try again.'
+      );
+    }
+
     const driveProbes = driveRoots.map(probeRoot);
 
     /*

@@ -521,13 +521,19 @@ ipcMain.handle('splash-seen', async (_e, version) => {
 });
 
 /** Default profile plus any pending shared-profile update, read at launch. */
+/*
+ * The app starts EMPTY. It used to auto-load the default profile, which meant
+ * every launch arrived pre-pointed at one particular pair of trees — fine while
+ * this was one migration, wrong now that it is a general copy tool: the folders
+ * on screen were not chosen for the job in hand, and a Compare run without
+ * noticing them reads as the app doing something you did not ask for.
+ *
+ * The presets are still there; `defaultFile` is returned so the picker can show
+ * which one is marked default, and loading one is a deliberate click.
+ */
 ipcMain.handle('profiles-boot', async () => {
   const s = profiles.getSettings(app);
-  let profile = null;
-  if (s.defaultProfile && fs.existsSync(s.defaultProfile)) {
-    profile = profiles.load(app, s.defaultProfile);
-  }
-  return { profile, defaultFile: s.defaultProfile || null, shared: profiles.checkShared(app) };
+  return { profile: null, defaultFile: s.defaultProfile || null, shared: profiles.checkShared(app) };
 });
 
 ipcMain.handle('profiles-export', async (_e, { profile, includeLocal }) => {

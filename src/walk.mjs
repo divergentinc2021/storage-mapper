@@ -11,7 +11,7 @@
  * past 260 characters and silently break naive walkers. Paths are prefixed with
  * \\?\ on win32 before any fs call.
  */
-import { readdirSync, statSync, createReadStream } from 'node:fs';
+import { readdirSync, statSync, createReadStream, writeFileSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
@@ -160,6 +160,42 @@ export function probeRoot(root) {
   } catch (e) {
     out.error = e.code || e.message;
   }
+  return out;
+}
+
+/**
+ * Can we actually WRITE here?
+ *
+ * probeRoot proves a destination exists, is a folder and can be READ. None of
+ * that implies a copy will work, and on 24 Nov 2026 the difference cost three
+ * days: a QNAP pool filled up, the NAS set every share read-only, and the app
+ * went on planning and "starting" copies against it. Reads succeeded, the mount
+ * said OK, the share listed fine — robocopy then failed per folder with
+ * ERROR 19 "The media is write protected", which surfaced as the copy simply
+ * not working.
+ *
+ * A destination is only usable if a real file can be created in it, so create
+ * one. Unique name, removed immediately, and a failure to clean up is reported
+ * rather than thrown — a stray zero-byte probe file is a far smaller problem
+ * than a silent read-only destination.
+ */
+export function probeWritable(root) {
+  const out = { root, writable: false, error: '' };
+  const name = `.storage-mapper-write-probe-${process.pid}-${Date.now()}`;
+  const probe = path.join(root, name);
+  try {
+    writeFileSync(toLongPath(probe), '');
+  } catch (e) {
+    // EROFS / EACCES / EPERM all mean the same thing to the user: cannot write.
+    out.error = e.code === 'EROFS' ? 'read-only (the share or volume is write protected)'
+      : e.code === 'EACCES' || e.code === 'EPERM' ? 'permission denied'
+      : e.code === 'ENOSPC' ? 'no space left'
+      : (e.code || e.message);
+    return out;
+  }
+  out.writable = true;
+  try { unlinkSync(toLongPath(probe)); }
+  catch (e) { out.error = `left a probe file behind: ${name} (${e.code || e.message})`; }
   return out;
 }
 
