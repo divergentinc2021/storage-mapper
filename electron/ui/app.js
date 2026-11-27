@@ -93,22 +93,22 @@ function baseOf(p) {
 var APP_VERSION = '';
 var FEATURES = [
   { group: 'Compare', items: [
-    { ico: '=', t: 'Already on NAS',
-      d: 'Finds Drive files the NAS already holds — including ones RENAMED between the two, matched on checksum rather than name.' },
+    { ico: '=', t: 'Already there',
+      d: 'Finds source files the destination already holds — including ones RENAMED between the two, matched on checksum rather than name.' },
     { ico: '+', t: 'New, with a destination',
       d: 'What is genuinely missing, mapped into your existing project taxonomy.' },
     { ico: '!', t: 'Conflicts',
       d: 'Same name and size but different content. Never silently treated as a duplicate.' },
     { ico: 'G', t: 'Google-native stubs',
       d: 'Docs, Sheets and Slides are link stubs on disk, not documents. Flagged as export-only — copying one archives a dead link.' },
-    { ico: '~', t: 'NAS-internal overlap',
-      d: 'The same file already sitting in two of your NAS trees.' },
+    { ico: '~', t: 'Duplicates at destination',
+      d: 'The same file already sitting in two of your destination trees.' },
   ]},
   { group: 'Accuracy', items: [
     { ico: '#', t: 'Exact mode with a Drive manifest',
       d: 'Checksums come from the Drive API for free. Without the manifest, matching falls back to size + name and a renamed copy looks new.' },
     { ico: 'x', t: 'The Drive mount is never hashed',
-      d: 'In Stream mode reading a file downloads it. Only NAS files whose size collides with a Drive file are hashed.' },
+      d: 'In Stream mode reading a file downloads it. Only destination files whose size collides with a source file are hashed.' },
     { ico: 'v', t: 'Nested folders collapsed', since: '0.3.0',
       d: 'Choosing a folder and one inside it used to walk the inner one twice and double every count.' },
     { ico: '#', t: 'The accuracy badge no longer guesses', since: '0.6.2',
@@ -117,17 +117,17 @@ var FEATURES = [
       d: 'A CSV that parses to zero usable rows used to drop to size+name in silence. It is now flagged red with the columns it needs. Feeding this app its own new.csv report does exactly that: no bytes, md5 or drive_id column, so every row is discarded.' },
   ]},
   { group: 'Teaching it', items: [
-    { ico: 'L', t: 'Already on NAS…',
+    { ico: 'L', t: 'Already there…',
       d: 'Link a file to the one it really duplicates; the two parent folders are recorded as the same project, so the rest follow.' },
     { ico: 'D', t: 'Set destination… with Browse', since: '0.3.1',
-      d: 'Pick a real folder. Relative paths are refused — they would be created next to the plan instead of on the NAS.' },
+      d: 'Pick a real folder. Relative paths are refused — they would be created next to the plan instead of at the destination.' },
     { ico: 'P', t: 'Profiles', since: '0.3.0',
       d: 'Save a whole setup and mark one default. Folders stay local; rules are portable.' },
     { ico: 'S', t: 'Shared team profile', since: '0.3.0',
-      d: 'Point at a profile on the NAS. When a colleague updates it you get a diff and choose: load, keep yours, or start fresh.' },
+      d: 'Point at a profile on a shared folder. When a colleague updates it you get a diff and choose: load, keep yours, or start fresh.' },
   ]},
   { group: 'Copying', items: [
-    { ico: '>', t: 'Copy to NAS', since: '0.4.0',
+    { ico: '>', t: 'Copy to destination', since: '0.4.0',
       d: 'Runs robocopy (rsync off Windows) from the app, in the background, with per-folder progress.' },
     { ico: 'T', t: 'Dry run first', since: '0.4.0',
       d: 'Passes /L so robocopy reports exactly what it would do and writes nothing.' },
@@ -144,13 +144,13 @@ var FEATURES = [
     { ico: 'H', t: 'Copy history', since: '0.5.0',
       d: 'Every run journalled — what, by whom, and the engine verdict per folder. Volume rollback is QNAP snapshots; this is the per-run detail.' },
     { ico: '⇄', t: 'Per-source mapping with arrows', since: '0.6.0',
-      d: 'Each Google Drive folder is paired with its OWN NAS folder and the arrows are shown. One shared destination would have flattened separate project trees into a single folder.' },
+      d: 'Each source folder is paired with its OWN destination folder and the arrows are shown. One shared destination would have flattened separate project trees into a single folder.' },
     { ico: '⚠', t: 'Same folder in both lists is refused', since: '0.6.0',
-      d: 'A path in the Drive AND NAS lists compares a tree with itself — everything reads as already on the NAS. Compare now stops and says which one.' },
+      d: 'A path in BOTH lists compares a tree with itself — everything reads as already there. Compare now stops and says which one.' },
     { ico: '!', t: 'Profile saving fixed', since: '0.5.1',
       d: 'Electron does not implement window.prompt, so asking for a profile name returned nothing and the save was silently skipped. It now uses a real dialog and confirms the file it wrote.' },
     { ico: '⚠', t: 'Both-sides folder flagged as you load it', since: '0.6.1',
-      d: 'A folder listed as both Drive and NAS is now outlined in red the moment the lists are drawn, so a profile saved with the mistake says so on load instead of failing several clicks later at Compare.' },
+      d: 'A folder listed as both source and destination is now outlined in red the moment the lists are drawn, so a profile saved with the mistake says so on load instead of failing several clicks later at Compare.' },
     { ico: '¶', t: 'Comparison errors are readable', since: '0.6.1',
       d: 'The failure message was laid out with newlines and bullets, then dropped into centred HTML where they collapsed into one run-on line. It also restated its own heading. Both fixed.' },
     { ico: '⚙', t: 'Releases are built by CI', since: '0.6.1',
@@ -306,7 +306,7 @@ async function openProfileMenu() {
   var settings = await window.mapper.profilesSettings();
   $('profHint').innerHTML =
     'Profiles remember your folders <i>and</i> the rules you have taught it. ' +
-    'A <b>shared profile</b> lives on the NAS so the team gets each other\'s rules.';
+    'A <b>shared profile</b> lives on a shared folder so the team gets each other\'s rules.';
   var shared = settings.sharedProfilePath
     ? '<div class="note">Watching <b>' + esc(settings.sharedProfilePath) + '</b> for updates. ' +
       '<button class="btn sm" id="pmUnshare">Stop watching</button></div>'
@@ -408,8 +408,8 @@ function clashingRoots() {
     NAS_ROOTS.forEach(function (n, ni) {
       var nd = normRoot(d), nn = normRoot(n), how = null;
       if (nd === nn) how = 'the same folder is on both sides';
-      else if (nd.indexOf(nn + '/') === 0) how = 'the Drive folder is inside the NAS folder';
-      else if (nn.indexOf(nd + '/') === 0) how = 'the NAS folder is inside the Drive folder';
+      else if (nd.indexOf(nn + '/') === 0) how = 'the source folder is inside the destination folder';
+      else if (nn.indexOf(nd + '/') === 0) how = 'the destination folder is inside the source folder';
       if (how) { out.drive[di] = 1; out.nas[ni] = 1; out.pairs.push({ drive: d, nas: n, how: how }); }
     });
   });
@@ -456,8 +456,8 @@ function renderPaths() {
     hint.textContent = DRIVE_ROOTS.length && NAS_ROOTS.length
       ? 'Nothing will be copied — Compare only produces a plan.'
       : DRIVE_ROOTS.length
-        ? 'No NAS folder yet — Scan only will index the Drive side so you can map and export a manifest.'
-        : 'Choose a Google Drive folder. A NAS folder is only needed to compare.';
+        ? 'No destination yet — Scan only will index the source side so you can map and export a manifest.'
+        : 'Choose a source folder. A destination is only needed to compare.';
   }
 }
 
@@ -654,10 +654,10 @@ function noteScan(res) {
   var msg = '<div class="warn"><b>Scanned, not compared.</b> Every file is listed as new ' +
     'because nothing was checked against a destination.';
   if (populated.length) {
-    msg += ' <b>' + populated.length + ' NAS folder(s) already contain files</b> — run ' +
+    msg += ' <b>' + populated.length + ' destination folder(s) already contain files</b> — run ' +
       '<i>Compare</i> instead, or copies you already made will be listed again.';
   } else if (probes.length) {
-    msg += ' The NAS folder(s) you chose are empty, so this matches what a comparison would say.';
+    msg += ' The destination folder(s) you chose are empty, so this matches what a comparison would say.';
   }
   msg += '</div>';
   $('main').insertAdjacentHTML('afterbegin', msg);
@@ -824,7 +824,7 @@ function renderTab() {
               : '') +
           '</div>'
         : '') +
-      table(['Drive file', 'Already on NAS at', 'Size', 'Matched by'],
+      table(['Source file', 'Already there at', 'Size', 'Matched by'],
       RESULT.duplicates, function (r) {
         var weak = r.tier && r.tier.indexOf('md5') === -1 && r.verified !== 'same';
         var label = r.verified === 'same' ? 'verified byte for byte'
@@ -848,9 +848,9 @@ function renderTab() {
         (ready.length < RESULT.new.length
           ? ' — the rest need <i>Set destination…</i> first and will be skipped'
           : '') + '</span>' +
-        '<button class="btn" id="btnCopyOpen"' + (ready.length ? '' : ' disabled') + '>Copy to NAS…</button>' +
+        '<button class="btn" id="btnCopyOpen"' + (ready.length ? '' : ' disabled') + '>Copy to destination…</button>' +
       '</div>' +
-      table(['Drive file', 'Proposed NAS destination', 'Size', ''],
+      table(['Source file', 'Proposed destination', 'Size', ''],
       RESULT.new, function (r, i) {
         return '<tr><td class="path">' + esc(r.drivePath) + '</td>' +
           '<td class="path">' + (r.proposedNas
@@ -859,7 +859,7 @@ function renderTab() {
           '<td class="num">' + fmtBytes(r.size) + '</td>' +
           '<td style="white-space:nowrap">' +
             '<button class="btn sm" data-act="dest" data-i="' + i + '">Set destination…</button> ' +
-            '<button class="btn sm" data-act="link" data-i="' + i + '">Already on NAS…</button>' +
+            '<button class="btn sm" data-act="link" data-i="' + i + '">Already there…</button>' +
           '</td></tr>';
       });
     m.querySelectorAll('button[data-act]').forEach(function (b) {
@@ -876,13 +876,13 @@ function renderTab() {
         ? '<div class="note"><b>A file that exists on both sides and differs.</b> ' +
           'Usually one that was updated in Drive after it was copied. The tool cannot ' +
           'know which version you want, so it does nothing until you say.' +
-          '<br><b>Copy alongside</b> writes the Drive version next to the NAS one as ' +
+          '<br><b>Copy alongside</b> writes the source version next to the existing one as ' +
           '<i>name (from Drive).ext</i> — nothing is overwritten and you reconcile later. ' +
-          '<b>Replace</b> writes over the NAS file.' +
+          '<b>Replace</b> writes over the destination file.' +
           (picked ? ' <b>' + picked + ' selected — they are included in Map and Copy.</b>' : '') +
           '</div>'
         : '') +
-      table(['Drive file', 'NAS file', 'Drive size', 'NAS size', 'Why', 'What to do'],
+      table(['Source file', 'Destination file', 'Source size', 'Destination size', 'Why', 'What to do'],
       RESULT.conflicts, function (r, i) {
         var mode = CONFLICT_PICKS[r.drivePath] || '';
         var opt = function (v, label) {
@@ -896,7 +896,7 @@ function renderTab() {
           '<td><select data-conf="' + i + '">' +
             opt('', 'Leave it') +
             opt('alongside', 'Copy alongside') +
-            opt('replace', 'Replace the NAS file') +
+            opt('replace', 'Replace the destination file') +
           '</select></td></tr>';
       });
     m.querySelectorAll('select[data-conf]').forEach(function (s) {
@@ -964,7 +964,7 @@ function renderTab() {
     }
   } else {
     m.innerHTML = droppedNote() +
-      '<div class="note">The same file present in more than one NAS tree, matched on name and ' +
+      '<div class="note">The same file present in more than one destination tree, matched on name and ' +
       'size. A <b>hint, not a verdict</b> — confirm with a compare-by-content pass before ' +
       'deleting anything.</div>' +
       table(['File', 'Size', 'Copies', 'Where'], OVERLAP, function (r) {
@@ -990,18 +990,18 @@ function openRemap(mode, row) {
     $('remapTitle').textContent = 'Set a destination';
     $('remapHint').innerHTML =
       'Everything under <b>' + esc(parentOf(row.drivePath) || '(root)') + '</b> will be mapped ' +
-      'to the NAS path you type. Keeping a <code>_fromDrive</code> leaf means incoming ' +
+      'to the destination path you type. Keeping a <code>_fromDrive</code> leaf means incoming ' +
       'material lands beside the curated content instead of merged into it.';
     $('remapInput').placeholder = 'e.g. Projects/Internal UWC Projects/Loggerhead Turtle Project/_fromDrive';
     $('remapInput').value = row.proposedNas || '';
     validateDest();
   } else {
-    $('remapTitle').textContent = 'Mark as already on the NAS';
+    $('remapTitle').textContent = 'Mark as already there';
     $('remapHint').innerHTML =
       'Find the file this one duplicates. Saving records that <b>' +
       esc(baseOf(parentOf(row.drivePath))) + '</b> and the NAS folder are the same project, ' +
       'so every other file in them matches on the next run too.';
-    $('remapInput').placeholder = 'Search the NAS by file name…';
+    $('remapInput').placeholder = 'Search the destination by file name…';
     $('remapInput').value = row.name || '';
     searchNas();
   }
@@ -1013,7 +1013,7 @@ async function searchNas() {
   var q = $('remapInput').value.trim();
   var rows = await window.mapper.searchNas(q, REMAP.row.size);
   if (!rows.length) {
-    $('remapResults').innerHTML = '<div class="empty">No NAS file matches.</div>';
+    $('remapResults').innerHTML = '<div class="empty">No destination file matches.</div>';
     return;
   }
   $('remapResults').innerHTML = rows.map(function (r, i) {
@@ -1058,7 +1058,7 @@ function validateDest() {
     $('remapWarn').innerHTML =
       '<b>Needs a full path.</b> Use <code>Browse…</code>, or type something like ' +
       '<code>Z:\\Projects\\Internal UWC Projects\\…\\_fromDrive</code>. ' +
-      'A relative path would be created next to the copy plan instead of on the NAS, ' +
+      'A relative path would be created next to the copy plan instead of at the destination, ' +
       'so it will be skipped.';
   }
 }
@@ -1146,7 +1146,7 @@ function syncStageButtons() {
     : stubsWaiting
       ? 'Nothing new. ' + stubsWaiting + ' Google stub(s) need their converted files — ' +
         'see the Native stubs tab'
-    : 'Nothing new — everything is already on the NAS';
+    : 'Nothing new — everything is already at the destination';
 
   /*
    * No longer gated on having been through Map.
@@ -1245,7 +1245,7 @@ function renderMap() {
       'They are not merged into existing sub-folders, and nothing existing is touched.';
 
   $('mapPreview').innerHTML =
-    '<div class="pairhead"><span>From (Google Drive)</span><span></span><span>To (NAS)</span><span></span></div>' +
+    '<div class="pairhead"><span>From (source)</span><span></span><span>To (destination)</span><span></span></div>' +
     MAP_PAIRS.map(function (p, i) {
       var mine = rowsForSource(p.drive);
       var bytes = mine.reduce(function (a, r) { return a + r.size; }, 0);

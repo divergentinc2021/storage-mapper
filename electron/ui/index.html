@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
-  <title>Storage Mapper</title>
+  <title>Bulk Copy</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -22,7 +22,7 @@
       <rect x="304" y="294" width="112" height="122" rx="10" opacity=".52"/>
     </g>
   </svg>
-  <h1>Storage Mapper <span>· Drive → NAS</span> <span class="ver" id="appVer"></span></h1>
+  <h1>Bulk Copy <span>· Source → Destination</span> <span class="ver" id="appVer"></span></h1>
   <div class="spacer"></div>
   <label style="font-size:11px;color:var(--muted)">PROFILE</label>
   <select id="profileSel" title="Saved profiles"><option value="">(unsaved)</option></select>
@@ -37,12 +37,12 @@
 
 <section class="setup">
   <div class="pick">
-    <label>Local / Google Drive</label>
+    <label>Source</label>
     <div class="paths" id="drivePaths"></div>
     <button class="btn" id="btnDrive">Choose…</button>
   </div>
   <div class="pick">
-    <label>NAS folders</label>
+    <label>Destination</label>
     <div class="paths" id="nasPaths"></div>
     <button class="btn" id="btnNas">Add…</button>
   </div>
@@ -70,8 +70,8 @@
     <!-- class, not an inline style: the clash warning recolours this via .hint.bad,
          and an inline colour would outrank the class and silently win. -->
     <div><span id="setupHint" class="hint"></span></div>
-    <!-- Scan is deliberately beside Compare, not hidden behind it. With no NAS
-         folder yet — a new or empty destination — there is nothing to compare
+    <!-- Scan is deliberately beside Compare, not hidden behind it. With no
+         destination folder yet — a new or empty one — there is nothing to compare
          against, and requiring a comparison first made the whole app unusable
          until a destination existed.
          Both live in ONE grid cell: .pick is a three-column grid, so a second
@@ -98,16 +98,16 @@
 </div>
 
 <div class="tabs" id="tabs">
-  <button class="on" data-tab="duplicates">Already on NAS <span class="n" id="nDup"></span></button>
+  <button class="on" data-tab="duplicates">Already there <span class="n" id="nDup"></span></button>
   <button data-tab="new">New <span class="n" id="nNew"></span></button>
   <button data-tab="conflicts">Conflicts <span class="n" id="nCon"></span></button>
   <button data-tab="natives">Native stubs <span class="n" id="nNat"></span></button>
-  <button data-tab="overlap">NAS overlap <span class="n" id="nOver"></span></button>
+  <button data-tab="overlap">Duplicates at destination <span class="n" id="nOver"></span></button>
 </div>
 
 <main id="main">
   <div class="empty" id="emptyState">
-    Choose your Google Drive folder and one or more NAS folders, then hit Compare.<br>
+    Choose a source folder and one or more destination folders, then hit Compare.<br>
     Nothing is copied, moved or deleted — this only produces a plan.
   </div>
 </main>
@@ -126,8 +126,8 @@
       </g>
     </svg>
     <div>
-      <h2>Storage Mapper <span id="splashVer"></span></h2>
-      <p class="hint">Plan a Google Drive → NAS migration without duplicating anything.</p>
+      <h2>Bulk Copy <span id="splashVer"></span></h2>
+      <p class="hint">Copy between any two folders without duplicating anything.</p>
     </div>
   </div>
   <div id="splashBody"></div>
@@ -161,7 +161,7 @@
 </dialog>
 
 <dialog id="copyDlg">
-  <h2 id="copyTitle">Copy to the NAS</h2>
+  <h2 id="copyTitle">Copy to the destination</h2>
   <p class="hint" id="copyHint"></p>
   <div class="note" id="copySafety">
     Only <b>new</b> files with an absolute destination are copied. Existing files are
@@ -196,8 +196,8 @@
   <p class="hint" id="sharedHint"></p>
   <div class="results" id="sharedDiff"></div>
   <div class="note">
-    Only <b>aliases and mapping rules</b> are shared. Your Drive and NAS folder
-    choices stay local to this machine and are never overwritten.
+    Only <b>aliases and mapping rules</b> are shared. Your source and destination
+    folder choices stay local to this machine and are never overwritten.
   </div>
   <div class="dlgfoot">
     <button class="btn" id="sharedFresh">Start fresh</button>
@@ -210,7 +210,7 @@
   <h2 id="remapTitle">Remap</h2>
   <p class="hint" id="remapHint"></p>
   <div style="display:flex;gap:8px">
-    <input type="text" id="remapInput" placeholder="Search the NAS by file name…">
+    <input type="text" id="remapInput" placeholder="Search the destination by file name…">
     <button class="btn" id="remapBrowse" hidden>Browse…</button>
   </div>
   <div class="warn" id="remapWarn" hidden></div>

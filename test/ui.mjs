@@ -198,7 +198,7 @@ check('nothing new means Map is disabled and says why', () => {
   api.RESULT = { new: [] }; api.MAPPED = null;
   api.syncStageButtons();
   assert.equal(mapBtn.disabled, true);
-  assert.match(mapBtn.title, /already on the NAS/);
+  assert.match(mapBtn.title, /already at the destination/);
 });
 
 check('classifying against the destination skips identical files', () => {
@@ -332,7 +332,7 @@ await acheck('Scan needs only a Drive folder; Compare still needs both', () => {
     'a source alone must be enough to scan — that is the empty-destination case');
   assert.equal(doc.getElementById('btnCompare').disabled, true,
     'Compare still needs something to compare against');
-  assert.match(doc.getElementById('setupHint').textContent, /No NAS folder yet/);
+  assert.match(doc.getElementById('setupHint').textContent, /No destination yet/);
 });
 
 await acheck('a scan lights Map without any comparison', async () => {

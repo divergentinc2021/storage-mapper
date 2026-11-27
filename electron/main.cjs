@@ -21,7 +21,7 @@ let lastRun = null; // { result, overlap, nasIndex } — reused when remapping
 function createWindow() {
   win = new BrowserWindow({
     width: 1280, height: 860, minWidth: 940, minHeight: 620,
-    title: 'Storage Mapper',
+    title: 'Bulk Copy',
     backgroundColor: '#f9f9f7',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
